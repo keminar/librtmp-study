@@ -1,2 +1,44 @@
-export LIBRARY_PATH=/usr/local/ssl/lib/
+说明
+--
+rtmpdump 官方的说明有点老旧，学习过程中遇到了一些困难，写成笔记方便记忆
+另外整合了网上的一些简单示例，因为我是用wsl模拟linux下开发，索性去掉win需
+要的一切，项目也使用Makefile来构建
+
+centos7编译rtmpdump
+--
+第一步安装openssl（太新太旧的版本都不行）和zlib
+```
+yum install zlib-devel
+wget https://www.openssl.org/source/old/1.0.2/openssl-1.0.2u.tar.gz
+tar zxf openssl-1.0.2u.tar.gz
+cd openssl-1.0.2u
+./config shared
+make
+make install
+```
+
+第二步添加环境变量
+```
+# gcc -lssl --verbose 查看gcc使用的LIBRARY_PATH
+export LIBRARY_PATH=$LIBRARY_PATH:/usr/local/ssl/lib
+```
+
+第三步构建二进制
+
+假设我的代码放在/root/rtmpdump/目录
+```
+cd /root/rtmpdump/
 make INC=-I/usr/local/ssl/include
+```
+
+第四步添加动态库，假设
+```
+echo /root/rtmpdump/librtmp > /etc/ld.so.conf.d/rtmp.conf
+ldconfig -v
+```
+
+使用示例
+--
+进入examples目录make all
+
+在vscode目录有构建的配置，可以自行copy到.vscode目录进行gdb调试
