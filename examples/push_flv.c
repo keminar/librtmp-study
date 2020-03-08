@@ -1,6 +1,6 @@
 // https://blog.csdn.net/leixiaohua1020/article/details/42104945
 // https://blog.csdn.net/u013470102/article/details/89473763
- 
+// 参考原文是windows下的工程，改成linux下的工程 
 
 #include <stdio.h>
 #include <stdlib.h>
