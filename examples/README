@@ -1,0 +1,2 @@
+export LIBRARY_PATH=/usr/local/ssl/lib/
+make INC=-I/usr/local/ssl/include
