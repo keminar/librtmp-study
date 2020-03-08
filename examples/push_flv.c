@@ -78,7 +78,7 @@ int publish_using_packet() {
     RTMPPacket *packet = NULL;
     uint32_t start_time = 0;
     uint32_t now_time = 0;
-    //上一帧时间戳
+    //上一帧时间
     long pre_frame_time = 0;
     long lasttime = 0;
     //下一帧是否是关键帧
@@ -152,7 +152,7 @@ int publish_using_packet() {
     start_time = RTMP_GetTime();
     while (1)
     {
-        //如果下一帧是关键帧，且上一帧的时间戳比现在的时间还长（外部时钟），说明推流速度过快了，可以延时下
+        //如果下一帧是关键帧，且上一帧的时间进度比系统推流过去的时间长，说明推流速度过快了，可以延时下
         now_time = RTMP_GetTime();
         if (((now_time - start_time) < (pre_frame_time)) && bNextIsKey) {
             //发送的太快了，休息1秒, 机制并不好

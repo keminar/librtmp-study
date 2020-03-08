@@ -7,5 +7,6 @@ rtmpdump
 rtmpgw
 rtmpsrv
 rtmpsuck
-examples/pushflv
+.vscode
+examples/push_flv
 examples/test.flv
