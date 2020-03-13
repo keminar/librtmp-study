@@ -41,4 +41,8 @@ ldconfig -v
 --
 进入examples目录make all
 
-在vscode目录有构建的配置，可以自行copy到.vscode目录进行gdb调试
+在vscode目录有构建的配置，可以自行copy到你的.vscode目录进行gdb调试
+
+测试中用的rtmp server
+--
+https://github.com/gwuhaolin/livego
