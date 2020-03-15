@@ -22,7 +22,7 @@
 #define HTONTIME(x) ((x >> 16 & 0xff) | (x << 16 & 0xff0000) | (x & 0xff00) | (x & 0xff000000))
 
 char *filename = "test.flv";
-char *rtmpserver = "rtmp://localhost/live/stream";
+char *rtmpserver = "rtmp://192.168.1.38/live/stream";
 
 /*读1字节*/
 int ReadU8(uint32_t *u8, FILE *fp)

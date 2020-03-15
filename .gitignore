@@ -12,3 +12,4 @@ examples/push_flv
 examples/dump_flv
 examples/test.flv
 examples/receive.flv
+examples/handshake_server
