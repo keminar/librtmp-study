@@ -6,6 +6,8 @@ PROGS=push_flv dump_flv handshake_server
 
 all: $(PROGS)
 
+debug: clean all
+
 push_flv: 
 	$(CC) $@.c $(CFLAGS) $(INC) $(LIB_RTMP) -o $@
 

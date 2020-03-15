@@ -81,6 +81,7 @@ int main(int argc, char *argv[])
     uint32_t server_time;
     // 客户端时间
     uint32_t client_time;
+    int bMatch;
     int i;
     //先做一个简单的tcp server
     serv_sock = socket(PF_INET, SOCK_STREAM, 0);
@@ -155,7 +156,7 @@ int main(int argc, char *argv[])
     }
     printf("\n\n");
 
-    //把c1 拷贝到s2, 为了简单这里没有再按协议分别计算time和time2
+    //把c1 拷贝到s2, 为了简单这里没有按协议分别计算time和time2，因为好像也没什么用
     printf("S2 Rand: ");
     memcpy(&s1s2[RTMP_SIG_SIZE], c1, RTMP_SIG_SIZE);
     for (i=RTMP_SIG_SIZE+8; i<RTMP_SIG_SIZE*2; i++) {
@@ -174,13 +175,19 @@ int main(int argc, char *argv[])
     memcpy(&server_time, c2, 4);
     //网络字节序转换为时间
     server_time = ntohl(server_time);
-    printf("C2 Server time: %d\n", server_time);
+    printf("C2 time: %d\n", server_time);
     printf("C2 Rand: ");
     for (i=8; i<RTMP_SIG_SIZE; i++) {
         printf("%d.", c2[i]);
     }
     printf("\n\n");
 
+    // 比较C2 与 S1值是否一样
+    bMatch = (memcmp(c2, s1s2, RTMP_SIG_SIZE) == 0);
+    if (!bMatch)
+    {
+        error_handling("signature does not match!");
+    }
     printf("hanshake success\n");
     close(clnt_sock);  
     close(serv_sock);
