@@ -100,13 +100,13 @@ extern "C"
 // 扩展时间戳 为4个字节
 #define RTMP_MAX_HEADER_SIZE 18
 
-// 代表包头长度为12
+// 代表Chunk Msg Header长度为11
 #define RTMP_PACKET_SIZE_LARGE    0
-// 代表包头长度为8
+// 代表Chunk Msg Header长度为7
 #define RTMP_PACKET_SIZE_MEDIUM   1
-// 代表包头长度为4
+// 代表Chunk Msg Header长度为3
 #define RTMP_PACKET_SIZE_SMALL    2
-// 代表包头长度为1
+// 代表Chunk Msg Header长度为0
 #define RTMP_PACKET_SIZE_MINIMUM  3
 
   typedef struct RTMPChunk
@@ -119,8 +119,8 @@ extern "C"
 
   typedef struct RTMPPacket
   {
-    uint8_t m_headerType;//channelID 头字节，值为（0，1，2，3）
-    uint8_t m_packetType;//AMFType  包头中的类型
+    uint8_t m_headerType; //basic header 中的type头字节，值为（0，1，2，3）
+    uint8_t m_packetType; // Chunk Msg Header中的AMFType类型
     uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
     int m_nChannel;
     uint32_t m_nTimeStamp;	/* timestamp */ //包头中的时间戳

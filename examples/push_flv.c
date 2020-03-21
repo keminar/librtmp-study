@@ -150,7 +150,7 @@ int publish_using_packet()
     RTMPPacket_Reset(packet);
 
     packet->m_hasAbsTimestamp = 0;
-    packet->m_nChannel = 0x04;
+    packet->m_nChannel = 0x04;//音视频
     packet->m_nInfoField2 = rtmp->m_stream_id;
 
     RTMP_LogPrintf("Start to send data ...\n");

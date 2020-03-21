@@ -1599,54 +1599,53 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    */
   /**
    * https://wenku.baidu.com/view/cdc944114afe04a1b171de86.html
-   * 完整包头12个字节，分为5个部分。还有其它3种包头分别为8字节，4字节，1字节
-   * Head_Type 1字节 包头首字节，记录包的类型和包的ChannelID 前两个Bit决定包头的长度，关系如下
-   * 前两位是00，则包头长度为12字长，前两个是01，则包头长度为8字节（无StreamID）
-   * 前两位是10，则包头长度为4字长（只有首字节和时间戳），前两个是11，则包头长度为1字节
-   * Head_Type 后6个Bit和StreamID决定了ChannelID，StreamID=（ChannelID-4）/5+1
+   * https://blog.csdn.net/xwjazjx1314/article/details/54863428
    * 
-   * ChannelID 用途（Head_Type后6Bit？）
+   * Basic header头部包括两个部分，第一部分为head type占前两个Bit, 决定Chunk Msg Header的长度，关系如下
+   * 前两位是00，则Msg Header长度为11字长，前两个是01，则Msg Header长度为7字节（无StreamID）
+   * 前两位是10，则Msg Header长度为3字长（只有首字节和时间戳），前两个是11，则Msg Header长度为0字节
+   * 
+   * 第二部分为Basic stream id为可变长度，最短6个Bit和head_type共同占一个字节，取值范围3－63
+   * 中间长度为6个Bit加一个字节，取值范围为64-319，则Basic header占2字节
+   * 最大长度为6个Bit加两个字节，取值范围为320-65599，则Basic header占3字节
+   * 整个Basic header 通过将head type和Basic stream id运算为一个ChannelID赋值
+   * 
+   * ChannelID 用途（可以认为是Basic header）
    * 02 Ping, ByteRead通道
    * 03 Invoke通道，connect,publish等在这个通道
    * 04 音频，视频通道
-   * 05 06 07 服务器保留，经观察FMS2也用这些Channel发音频和视频
-   * 以上称basic header （basic header长度是1-3个字节）
-   *
-   *
-   * 以下合称msg header
-   * 其它几个包头字段为
-   * TIMER 3个字节，时间戳，AMFSize 3个字节 ，表示数据大小，AMFType 1字节表示数据类型，StreamID 4字节
+   * 05 06 07 服务器保留
    * 
-   * AMFSite 代表整个AMF长度，可包括多个RTMP封包，连续的RTMP封包的包头为1个字节
-   * AMFType 常见数据类型如下：
+   * Chunk Msg Header 也为可变长度，取值分别为11个字节，7字节，3字节，分为4个部分
+   * TIMER 3个字节，时间戳，AMFSize 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
+   * TIMER 存的是相邻两个分片的相对时间戳
+   * AMFSize 代表整个AMF长度，可包括多个RTMP封包，连续的RTMP封包的包头为1个字节
+   * packet Type 常见数据类型如下：
    * 0x01 |  Chunk Size |
-   * 0x02 |  Unknown    |
-   * 0x03 |  Bytes Read |
-   * 0x04 |  Ping       |
+   * 0x03 |  Bytes Read Report|
+   * 0x04 |  Control    |
    * 0x05 |  Server BW  |
    * 0x06 |  Client BW  |
-   * 0x07 |  Unknown    |
    * 0x08 |  Audio Data |
    * 0x09 |  Video Data |
-   * 0x0A-0x0E | Unknown        |
    * 0x0F |  FLEX_STREAM_SEND   |
    * 0x10 |  FLEX_STREAM_OBJECT |
    * 0x11 |  FLEX_MESSAGE  |
-   * 0x12 |  Notify        |
+   * 0x12 |  Info          |
    * 0x13 |  Shared Object |
    * 0x14 |  Invoke        |
-   * 0x16 |  Stream Data   |
+   * 0x16 |  Flash Video   |
    * 
    * StreamID 单视频流的唯一ID，一路流既有音频又有视频，则StreamID相同，但ChannelID不同，不是音视频，则为0
    * 
-   * 包头后面是扩展时间字段 4个字节,只有当块消息头中的普通时间戳设置为0x00ffffff 时，本字段才被传送
+   * Chunk Msg Header后面是扩展时间字段 4个字节,只有当Msg Header头中的普通时间戳设置为0x00ffffff 时，本字段才被传送
    * 如果普通时间戳的值小于0x00ffffff，那么本字段一定不能出现
    */
   packet.m_nChannel = 0x03; /* control channel (invoke) */ //块流ID 
-  packet.m_headerType = RTMP_PACKET_SIZE_LARGE;// Head_Type，声明msg header长度为11字节
+  packet.m_headerType = RTMP_PACKET_SIZE_LARGE;//  Basic header的head type为0，表明msg header长度为11字节
   packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为20，表示为Invoke方法调用
-  packet.m_nTimeStamp = 0;// 时间戳
-  packet.m_nInfoField2 = 0;// 消息流id StreamID
+  packet.m_nTimeStamp = 0;// Chunk Msg Header中的时间戳
+  packet.m_nInfoField2 = 0;// Chunk Msg Header中的消息流id StreamID
   packet.m_hasAbsTimestamp = 0;// 相对时间
   packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;//跳过包头，指到包体位置
 
@@ -1654,11 +1653,13 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * RTMP封包除去包头部分，其它的是AMF数据部分，AMF数据里可以是命令也可以是音视频数据
    * AMF又分为两个部分，ObjType大小为一个字节和ObjValue大小不固定，ObjValue里可以是另一个AMF数据
    * ObjType 数据类型如下
-   * 0x01 BOOLEAN,       0x02 STRING,       0x03 OBJECT,       0x04 MOVIECLIP
-   * 0x05 NULL,          0x06 UNDEFINED,    0x07 REFERENCE,    0x08 MIXED_ARRAY
-   * 0x09 END_OF_OBJECT, 0x0A ARRAY,        0x0B DATE,         0xC LONG_STRING
-   * 0xD UNSUPPORTED,    0xE RECORDSET,     0xF XML,           0x10 CLASS_OBJECT
-   * 0x11 AMF3_OBJECT,   0x00 NUMBER
+   * 0x00 NUMBER,        0x01 BOOLEAN,      0x02 STRING,       0x03 OBJECT,       
+   * 0x04 MOVIECLIP (保留，无用)
+   * 0x05 NULL,          0x06 UNDEFINED,    0x07 REFERENCE,    0x08 ECMA_ARRAY,   0x09 END_OF_OBJECT
+   * 0x0A STRICT_ARRAY,  0x0B DATE,         0xC LONG_STRING,   0xD UNSUPPORTED,    
+   * 0xE RECORDSET (保留，无用)
+   * 0xF XML_DOC,        0x10 TYPED_OBJECT
+   * 0x11 AVMPLUS (switch to AMF3)
    */
   enc = packet.m_body;//新指针指到包体开始位置
   enc = AMF_EncodeString(enc, pend, &av_connect);//AMF string类型，将"connnect"字符串采用AMF0编码
@@ -4087,8 +4088,9 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     RTMP_Log(RTMP_LOGWARNING, "Larger timestamp than 24-bit: 0x%x", t);
   }
 
+  // hptr指到Basic Header头部
   hptr = header;
-  // 把ChunkBasicHeader的Fmt类型左移6位， 为什么？
+  // 把ChunkBasicHeader的Fmt类型左移6位
   c = packet->m_headerType << 6;
   // 计算basic header的第一个字节值，前两位为fmt. 可以参考官方协议：流的分块 --- 6.1.1节
   switch (cSize)
@@ -4279,7 +4281,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     }
   }
 
-  // 放到二维数组
+  // 放到二维数组, 记录作为上一个包，用于函数开头取
   if (!r->m_vecChannelsOut[packet->m_nChannel])
     r->m_vecChannelsOut[packet->m_nChannel] = malloc(sizeof(RTMPPacket));
   memcpy(r->m_vecChannelsOut[packet->m_nChannel], packet, sizeof(RTMPPacket));
