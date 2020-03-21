@@ -3997,8 +3997,9 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
 
   if (packet->m_nChannel >= r->m_channelsAllocatedOut)
   {
+    //　一次性申请10个，内存利用高
     int n = packet->m_nChannel + 10;
-    // 申请内存
+    // 申请内存，为每一个nChannel保存最近一个内容
     RTMPPacket **packets = realloc(r->m_vecChannelsOut, sizeof(RTMPPacket *) * n);
     if (!packets)
     {
