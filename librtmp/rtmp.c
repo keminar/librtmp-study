@@ -69,6 +69,7 @@ TLS_CTX RTMP_TLS_ctx;
 #define RTMP_SIG_SIZE 1536
 #define RTMP_LARGE_HEADER_SIZE 12
 
+// 包头长度
 static const int packetSize[] = {12, 8, 4, 1};
 
 int RTMP_ctrlC;
@@ -1108,6 +1109,7 @@ SocksNegotiate(RTMP *r)
   }
 }
 
+// https://blog.csdn.net/xwjazjx1314/article/details/54880391
 int RTMP_ConnectStream(RTMP *r, int seekTime)
 {
   RTMPPacket packet = {0};
@@ -1591,6 +1593,11 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
     return RTMP_SendPacket(r, cp, TRUE);
 
   /**
+   * +-------------+------------------+--------------------+------------+
+   * |Basic header | Chunk Msg Header |Extended Time Stamp | Chunk Data |
+   * +-------------+------------------+--------------------+------------+
+   */
+  /**
    * https://wenku.baidu.com/view/cdc944114afe04a1b171de86.html
    * 完整包头12个字节，分为5个部分。还有其它3种包头分别为8字节，4字节，1字节
    * Head_Type 1字节 包头首字节，记录包的类型和包的ChannelID 前两个Bit决定包头的长度，关系如下
@@ -1598,13 +1605,15 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 前两位是10，则包头长度为4字长（只有首字节和时间戳），前两个是11，则包头长度为1字节
    * Head_Type 后6个Bit和StreamID决定了ChannelID，StreamID=（ChannelID-4）/5+1
    * 
-   * ChannelID 用途（包头后6Bit？）
+   * ChannelID 用途（Head_Type后6Bit？）
    * 02 Ping, ByteRead通道
    * 03 Invoke通道，connect,publish等在这个通道
    * 04 音频，视频通道
    * 05 06 07 服务器保留，经观察FMS2也用这些Channel发音频和视频
+   * 以上称basic header （basic header长度是1-3个字节）
    *
    *
+   * 以下合称msg header
    * 其它几个包头字段为
    * TIMER 3个字节，时间戳，AMFSize 3个字节 ，表示数据大小，AMFType 1字节表示数据类型，StreamID 4字节
    * 
@@ -1629,10 +1638,13 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 0x16 |  Stream Data   |
    * 
    * StreamID 单视频流的唯一ID，一路流既有音频又有视频，则StreamID相同，但ChannelID不同，不是音视频，则为0
+   * 
+   * 包头后面是扩展时间字段 4个字节,只有当块消息头中的普通时间戳设置为0x00ffffff 时，本字段才被传送
+   * 如果普通时间戳的值小于0x00ffffff，那么本字段一定不能出现
    */
-  packet.m_nChannel = 0x03; /* control channel (invoke) */ 
-  packet.m_headerType = RTMP_PACKET_SIZE_LARGE;// Head_Type，包头长度为12字节
-  packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为14，表示为Invoke方法调用
+  packet.m_nChannel = 0x03; /* control channel (invoke) */ //块流ID 
+  packet.m_headerType = RTMP_PACKET_SIZE_LARGE;// Head_Type，声明msg header长度为11字节
+  packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为20，表示为Invoke方法调用
   packet.m_nTimeStamp = 0;// 时间戳
   packet.m_nInfoField2 = 0;// 消息流id StreamID
   packet.m_hasAbsTimestamp = 0;// 相对时间
@@ -1650,10 +1662,11 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    */
   enc = packet.m_body;//新指针指到包体开始位置
   enc = AMF_EncodeString(enc, pend, &av_connect);//AMF string类型，将"connnect"字符串采用AMF0编码
-  enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);//AMF NUMBER类型，调用Invoke函数次数，从0开始累加
+  // 编码命令消息的数目,也就是传输ID， Transation ID connect时值为1
+  enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
   *enc++ = AMF_OBJECT;// 接下来是AMF对象，内含多个KEY=>VALUE属性编码
 
-  enc = AMF_EncodeNamedString(enc, pend, &av_app, &r->Link.app);// 编码客户端要连接到的服务应用名 app=xxx
+  enc = AMF_EncodeNamedString(enc, pend, &av_app, &r->Link.app);// app 客户端要连接到的服务应用名 app=xxx
   if (!enc)
     return FALSE;
   if (r->Link.protocol & RTMP_FEATURE_WRITE)
@@ -1664,52 +1677,52 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
   }
   if (r->Link.flashVer.av_len)
   {
-    // 编码flash播放器版本
+    // flashver flash播放器版本
     enc = AMF_EncodeNamedString(enc, pend, &av_flashVer, &r->Link.flashVer);
     if (!enc)
       return FALSE;
   }
   if (r->Link.swfUrl.av_len)
   {
-    // 编码发起连接的swf文件的url
+    // swfUrl 发起连接的swf文件的url
     enc = AMF_EncodeNamedString(enc, pend, &av_swfUrl, &r->Link.swfUrl);
     if (!enc)
       return FALSE;
   }
   if (r->Link.tcUrl.av_len)
   {
-    // 编码服务url，有下列的格式  protocol://servername:port/appName/appInstance
+    // tcUrl rtmp服务url，有下列的格式  protocol://servername:port/appName/appInstance
     enc = AMF_EncodeNamedString(enc, pend, &av_tcUrl, &r->Link.tcUrl);
     if (!enc)
       return FALSE;
   }
   if (!(r->Link.protocol & RTMP_FEATURE_WRITE))
   {
-    enc = AMF_EncodeNamedBoolean(enc, pend, &av_fpad, FALSE);// 编码是否使用代理true:使用  false:没有使用
+    enc = AMF_EncodeNamedBoolean(enc, pend, &av_fpad, FALSE);// fpad 是否使用代理true:使用  false:没有使用
     if (!enc)
       return FALSE;
     enc = AMF_EncodeNamedNumber(enc, pend, &av_capabilities, 15.0);
     if (!enc)
       return FALSE;
-    enc = AMF_EncodeNamedNumber(enc, pend, &av_audioCodecs, r->m_fAudioCodecs);// 编码客户端支持的音频编解码器
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_audioCodecs, r->m_fAudioCodecs);// audioCodecs 客户端支持的音频编解码器
     if (!enc)
       return FALSE;
-    enc = AMF_EncodeNamedNumber(enc, pend, &av_videoCodecs, r->m_fVideoCodecs);// 编码支持的视频编解码器
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_videoCodecs, r->m_fVideoCodecs);// videoCodecs 支持的视频编解码器
     if (!enc)
       return FALSE;
-    enc = AMF_EncodeNamedNumber(enc, pend, &av_videoFunction, 1.0);//表明所支持的特殊视频方法
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_videoFunction, 1.0);//videoFunction 表明所支持的特殊视频方法
     if (!enc)
       return FALSE;
     if (r->Link.pageUrl.av_len)
     {
-      enc = AMF_EncodeNamedString(enc, pend, &av_pageUrl, &r->Link.pageUrl);// 编码SWF文件被加载的页面的Url
+      enc = AMF_EncodeNamedString(enc, pend, &av_pageUrl, &r->Link.pageUrl);// pageUrl 编码SWF文件被加载的页面的Url
       if (!enc)
         return FALSE;
     }
   }
   if (r->m_fEncoding != 0.0 || r->m_bSendEncoding)
   { /* AMF0, AMF3 not fully supported yet */
-    enc = AMF_EncodeNamedNumber(enc, pend, &av_objectEncoding, r->m_fEncoding);
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_objectEncoding, r->m_fEncoding);  //objectEncoding AMF 编码方式
     if (!enc)
       return FALSE;
   }
@@ -1731,7 +1744,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
     if (!enc)
       return FALSE;
   }
-  // 额外设置
+  // 额外可选设置
   if (r->Link.extras.o_num)
   {
     int i;
@@ -3967,6 +3980,9 @@ int RTMP_SendChunk(RTMP *r, RTMPChunk *chunk)
   return wrote;
 }
 
+/**
+ * https://blog.csdn.net/xwjazjx1314/article/details/54863428
+ */
 int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
 {
   const RTMPPacket *prevPacket;
@@ -3982,6 +3998,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
   if (packet->m_nChannel >= r->m_channelsAllocatedOut)
   {
     int n = packet->m_nChannel + 10;
+    // 申请内存，放packet队列？
     RTMPPacket **packets = realloc(r->m_vecChannelsOut, sizeof(RTMPPacket *) * n);
     if (!packets)
     {
@@ -3991,22 +4008,32 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
       return FALSE;
     }
     r->m_vecChannelsOut = packets;
+    //置为0
     memset(r->m_vecChannelsOut + r->m_channelsAllocatedOut, 0, sizeof(RTMPPacket *) * (n - r->m_channelsAllocatedOut));
     r->m_channelsAllocatedOut = n;
   }
 
+  // 前一个packet存在且不是完整的ChunkMsgHeader，因此有可能需要调整块消息头的类型
   prevPacket = r->m_vecChannelsOut[packet->m_nChannel];
   if (prevPacket && packet->m_headerType != RTMP_PACKET_SIZE_LARGE)
   {
     /* compress a bit by using the prev packet's attributes */
+    // 获取ChunkMsgHeader类型，前一个Chunk与当前Chunk比较
+		// 如果前后两个块的大小、包类型及块头类型都相同，则将块头类型fmt设为2，
+		// 即可省略消息长度、消息类型id、消息流id
+		// 可以参考官方协议：流的分块 --- 6.1.2.3节
     if (prevPacket->m_nBodySize == packet->m_nBodySize && prevPacket->m_packetType == packet->m_packetType && packet->m_headerType == RTMP_PACKET_SIZE_MEDIUM)
       packet->m_headerType = RTMP_PACKET_SIZE_SMALL;
 
+    // 前后两个块的时间戳相同，且块头类型fmt为2，则相应的时间戳也可省略，因此将块头类型置为3
+		// 可以参考官方协议：流的分块 --- 6.1.2.4节
     if (prevPacket->m_nTimeStamp == packet->m_nTimeStamp && packet->m_headerType == RTMP_PACKET_SIZE_SMALL)
       packet->m_headerType = RTMP_PACKET_SIZE_MINIMUM;
+    // 前一个包的时间戳, 为了后面计算增量
     last = prevPacket->m_nTimeStamp;
   }
 
+  // 块头类型fmt取值0、1、2、3，超过3就表示出错
   if (packet->m_headerType > 3) /* sanity */
   {
     RTMP_Log(RTMP_LOGERROR, "sanity failed!! trying to send header of type: 0x%02x.",
@@ -4014,14 +4041,21 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     return FALSE;
   }
 
+  // 块头初始大小 = 基本头(1字节) + 块消息头大小(11/7/3/0) = [12, 8, 4, 1]
+	// 块基本头是1-3字节，因此用变量cSize来表示剩下的0-2字节
+	// nSize 表示块头初始大小， hSize表示块头大小
   nSize = packetSize[packet->m_headerType];
   hSize = nSize;
   cSize = 0;
+  // 时间戳增量
   t = packet->m_nTimeStamp - last;
 
   if (packet->m_body)
   {
+    // m_body是指向负载数据首地址的指针；“-”号用于指针前移
+    // 块头的首指针
     header = packet->m_body - nSize;
+    // 块头的尾指针
     hend = packet->m_body;
   }
   else
@@ -4030,16 +4064,20 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     hend = hbuf + sizeof(hbuf);
   }
 
+  // 块流id(cs id)大于319，则块基本头占3个字节
   if (packet->m_nChannel > 319)
     cSize = 2;
+  // 块流id(cs id)在64与319之间，则块基本头占2个字节  
   else if (packet->m_nChannel > 63)
     cSize = 1;
+  // ChunkBasicHeader的长度比初始长度还要长  
   if (cSize)
   {
     header -= cSize;
     hSize += cSize;
   }
 
+  // 时间戳大于0xffffff时还有扩展时间戳
   if (t >= 0xffffff)
   {
     header -= 4;
@@ -4048,56 +4086,86 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
   }
 
   hptr = header;
+  // 把ChunkBasicHeader的Fmt类型左移6位， 为什么？
   c = packet->m_headerType << 6;
+  // 计算basic header的第一个字节值，前两位为fmt. 可以参考官方协议：流的分块 --- 6.1.1节
   switch (cSize)
   {
   case 0:
+    // 把ChunkBasicHeader的低6位设置成ChunkStreamID( cs id )
     c |= packet->m_nChannel;
     break;
   case 1:
+    // 同理，但低6位设置成000000
     break;
   case 2:
+    // 同理，但低6位设置成000001
     c |= 1;
     break;
   }
+  // 将c的值设到basic header第一个字节
+  // 可以拆分成两句*hptr=c; hptr++，此时hptr指向第2个字节
   *hptr++ = c;
+  // 设置basic header的第二(三)个字节值
   if (cSize)
   {
+    // 将要放到第2字节的内容tmp
     int tmp = packet->m_nChannel - 64;
+    // 获取低位存储与第2字节
     *hptr++ = tmp & 0xff;
+    // ChunkBasicHeader是最大的3字节时,获取高位存储于最后1个字节（注意：排序使用大端序列，和主机相反）
     if (cSize == 2)
       *hptr++ = tmp >> 8;
   }
 
+  // ChunkMsgHeader长度为11、7、3, 都含有timestamp（3字节
   if (nSize > 1)
   {
+    // 将时间戳(相对或绝对)转化为3个字节存入hptr，如果时间戳超过0xffffff,则后面还要填入Extend Timestamp
     hptr = AMF_EncodeInt24(hptr, hend, t > 0xffffff ? 0xffffff : t);
   }
 
+  // ChunkMsgHeader长度为11、7，都含有 msg length + msg type id
   if (nSize > 4)
   {
+    // 将消息长度(msg length)转化为3个字节存入hptr
     hptr = AMF_EncodeInt24(hptr, hend, packet->m_nBodySize);
     *hptr++ = packet->m_packetType;
   }
-
+  // ChunkMsgHeader长度为11, 含有msg stream id（ 小端）
   if (nSize > 8)
     hptr += EncodeInt32LE(hptr, packet->m_nInfoField2);
 
+  // 如果时间戳大于0xffffff，则需要写入Extend Timestamp
   if (t >= 0xffffff)
     hptr = AMF_EncodeInt32(hptr, hend, t);
 
+  // 到此为止，已经将块头填写好了
+  // 此时nSize表示负载数据的长度
   nSize = packet->m_nBodySize;
+  // buffer是指向负载数据区的指针
   buffer = packet->m_body;
+  //Chunk大小，默认是128字节
   nChunkSize = r->m_outChunkSize;
 
   RTMP_Log(RTMP_LOGDEBUG2, "%s: fd=%d, size=%d", __FUNCTION__, r->m_sb.sb_socket,
            nSize);
-  /* send all chunks in one HTTP request */
+  /* send all chunks in one HTTP request 使用HTTP协议*/
   if (r->Link.protocol & RTMP_FEATURE_HTTP)
   {
+    // nSize:Message负载长度；nChunkSize：Chunk长度；
+		// 例nSize：307，nChunkSize:128；
+		// 可分为（307 + 128 - 1）/128 = 3个
+		// 为什么加 nChunkSize - 1？因为除法会只取整数部分！
     int chunks = (nSize + nChunkSize - 1) / nChunkSize;
+    // Chunk个数超过一个
     if (chunks > 1)
     {
+      // 注意：ChunkBasicHeader的长度 = cSize + 1
+			// 消息分n块后总的开销：
+			// n个ChunkBasicHeader，1个ChunkMsgHeader，1个Message负载
+			// 实际上只有第一个Chunk是完整的，剩下的只有ChunkBasicHeader
+      // 此时nsize是负载数据的长度，hSize是实际首个chunk的包头长
       tlen = chunks * (cSize + 1) + nSize + hSize;
       tbuf = malloc(tlen);
       if (!tbuf)
@@ -4105,30 +4173,40 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
       toff = tbuf;
     }
   }
+  // 消息的负载 + 头
   while (nSize + hSize)
   {
     int wrote;
-
+    // 消息负载大小 < Chunk默认大小(128字节）（不用分块）
     if (nSize < nChunkSize)
-      nChunkSize = nSize;
+      nChunkSize = nSize;// Chunk可能小于设定值
 
     RTMP_LogHexString(RTMP_LOGDEBUG2, (uint8_t *)header, hSize);
     RTMP_LogHexString(RTMP_LOGDEBUG2, (uint8_t *)buffer, nChunkSize);
+    // 如果r->Link.protocol采用Http协议，则将RTMP包数据封装成多个Chunk，然后一次性发送。
+		// 否则每封装成一个块，就立即发送出去
     if (tbuf)
     {
+      // 将从Chunk头开始的nChunkSize + hSize个字节拷贝至toff中，
+			// 这些拷贝的数据包括块头数据(hSize字节)和nChunkSize个负载数据
       memcpy(toff, header, nChunkSize + hSize);
       toff += nChunkSize + hSize;
     }
-    else
+    else // 负载数据长度不超过设定的块大小，不需要分块，因此tbuf为NULL；或者r->Link.protocol不采用Http
     {
+      // 直接将负载数据和块头数据发送出去
       wrote = WriteN(r, header, nChunkSize + hSize);
       if (!wrote)
         return FALSE;
     }
+    // 消息负载长度 - Chunk负载长度
     nSize -= nChunkSize;
+    // buffer指针前移1个Chunk负载长度
     buffer += nChunkSize;
+    // 重置块头大小为0，后续的块只需要有基本头(或加上扩展时间戳)即可
     hSize = 0;
 
+    // 如果消息负载数据还没有发完，准备填充下一个块的块头数据
     if (nSize > 0)
     {
       header = buffer - 1;

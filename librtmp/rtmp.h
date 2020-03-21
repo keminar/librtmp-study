@@ -95,11 +95,18 @@ extern "C"
 /*      RTMP_PACKET_TYPE_...                0x15 */
 #define RTMP_PACKET_TYPE_FLASH_VIDEO        0x16
 
+// basic header长度是1-3个字节
+// msg header 最长是11个字节
+// 扩展时间戳 为4个字节
 #define RTMP_MAX_HEADER_SIZE 18
 
+// 代表包头长度为12
 #define RTMP_PACKET_SIZE_LARGE    0
+// 代表包头长度为8
 #define RTMP_PACKET_SIZE_MEDIUM   1
+// 代表包头长度为4
 #define RTMP_PACKET_SIZE_SMALL    2
+// 代表包头长度为1
 #define RTMP_PACKET_SIZE_MINIMUM  3
 
   typedef struct RTMPChunk
@@ -112,13 +119,13 @@ extern "C"
 
   typedef struct RTMPPacket
   {
-    uint8_t m_headerType;//channelID
-    uint8_t m_packetType;//AMFType
+    uint8_t m_headerType;//channelID 头字节，值为（0，1，2，3）
+    uint8_t m_packetType;//AMFType  包头中的类型
     uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
     int m_nChannel;
-    uint32_t m_nTimeStamp;	/* timestamp */
+    uint32_t m_nTimeStamp;	/* timestamp */ //包头中的时间戳
     int32_t m_nInfoField2;	/* last 4 bytes in a long header */ //StreamID
-    uint32_t m_nBodySize;
+    uint32_t m_nBodySize;   // msg length 包头中的消息长度
     uint32_t m_nBytesRead;
     RTMPChunk *m_chunk;
     char *m_body;
