@@ -185,7 +185,7 @@ AMF_EncodeString(char *output, char *outend, const AVal *bv)
   }
   else
   {
-    //长字符串类型
+    //宽字符串类型
     *output++ = AMF_LONG_STRING;
 
     output = AMF_EncodeInt32(output, outend, bv->av_len);

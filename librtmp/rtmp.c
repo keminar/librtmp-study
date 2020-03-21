@@ -3998,7 +3998,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
   if (packet->m_nChannel >= r->m_channelsAllocatedOut)
   {
     int n = packet->m_nChannel + 10;
-    // 申请内存，放packet队列？
+    // 申请内存
     RTMPPacket **packets = realloc(r->m_vecChannelsOut, sizeof(RTMPPacket *) * n);
     if (!packets)
     {
@@ -4008,8 +4008,9 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
       return FALSE;
     }
     r->m_vecChannelsOut = packets;
-    //置为0
+    //内存做初始化为0
     memset(r->m_vecChannelsOut + r->m_channelsAllocatedOut, 0, sizeof(RTMPPacket *) * (n - r->m_channelsAllocatedOut));
+    //设置计数值
     r->m_channelsAllocatedOut = n;
   }
 
@@ -4209,26 +4210,34 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     // 如果消息负载数据还没有发完，准备填充下一个块的块头数据
     if (nSize > 0)
     {
+      // 空出包头的位置
       header = buffer - 1;
+      // 包头大小为1
       hSize = 1;
+      // 如果可变基本头不为0
       if (cSize)
       {
+        // 再多空出几个位置
         header -= cSize;
         hSize += cSize;
       }
+      // 检查是不是有额外时间
       if (t >= 0xffffff)
       {
         header -= 4;
         hSize += 4;
       }
+      //写入head_type
       *header = (0xc0 | c);
       if (cSize)
       {
+        //写入可变基本头
         int tmp = packet->m_nChannel - 64;
         header[1] = tmp & 0xff;
         if (cSize == 2)
           header[2] = tmp >> 8;
       }
+      //写入额外时间戳
       if (t >= 0xffffff)
       {
         char *extendedTimestamp = header + 1 + cSize;
@@ -4236,6 +4245,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
       }
     }
   }
+  // 如果采用Http协议，发出去
   if (tbuf)
   {
     int wrote = WriteN(r, tbuf, toff - tbuf);
@@ -4245,24 +4255,30 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
       return FALSE;
   }
 
+  // 如果AMFType为INVOKE类型
   /* we invoked a remote method */
   if (packet->m_packetType == RTMP_PACKET_TYPE_INVOKE)
   {
     AVal method;
     char *ptr;
+    // 包体指针向前移一步，跳过method类型字段
     ptr = packet->m_body + 1;
+    // 解析method名字
     AMF_DecodeString(ptr, &method);
     RTMP_Log(RTMP_LOGDEBUG, "Invoking %s", method.av_val);
     /* keep it in call queue till result arrives */
     if (queue)
     {
       int txn;
+      //+2跳过method长度字段,+1跳过传输入id的类型字段，再加av_len跳过method内容
       ptr += 3 + method.av_len;
+      // 解析传输ID值
       txn = (int)AMF_DecodeNumber(ptr);
       AV_queue(&r->m_methodCalls, &r->m_numCalls, &method, txn);
     }
   }
 
+  // 放到二维数组
   if (!r->m_vecChannelsOut[packet->m_nChannel])
     r->m_vecChannelsOut[packet->m_nChannel] = malloc(sizeof(RTMPPacket));
   memcpy(r->m_vecChannelsOut[packet->m_nChannel], packet, sizeof(RTMPPacket));
