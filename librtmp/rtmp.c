@@ -1606,8 +1606,8 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 前两位是10，则Msg Header长度为3字长（只有首字节和时间戳），前两个是11，则Msg Header长度为0字节
    * 
    * 第二部分为Basic stream id为可变长度，最短6个Bit和head_type共同占一个字节，取值范围3－63
-   * 中间长度为6个Bit加一个字节，取值范围为64-319，则Basic header占2字节
-   * 最大长度为6个Bit加两个字节，取值范围为320-65599，则Basic header占3字节
+   * 中间长度为6个Bit加一个字节，取值范围为64-319(2的8次方+63)，则Basic header占2字节
+   * 最大长度为6个Bit加两个字节，取值范围为320-65599(2的16次方+63)，则Basic header占3字节
    * 整个Basic header 通过将head type和Basic stream id运算为一个ChannelID赋值
    * 
    * ChannelID 用途（可以认为是Basic header）
