@@ -120,15 +120,15 @@ extern "C"
   typedef struct RTMPPacket
   {
     uint8_t m_headerType; //basic header 中的type头字节，值为（0，1，2，3）
-    uint8_t m_packetType; // Chunk Msg Header中的AMFType类型
+    uint8_t m_packetType; // Chunk Msg Header中的package Type类型
     uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
-    int m_nChannel;
-    uint32_t m_nTimeStamp;	/* timestamp */ //包头中的时间戳
-    int32_t m_nInfoField2;	/* last 4 bytes in a long header */ //StreamID
-    uint32_t m_nBodySize;   // msg length 包头中的消息长度
+    int m_nChannel;  //通过设置ChannelID来设置Basic stream id的长度和值
+    uint32_t m_nTimeStamp;	/* timestamp */ //Chunk Msg Header中的时间戳
+    int32_t m_nInfoField2;	/* last 4 bytes in a long header */ //Chunk Msg Header中msg StreamID
+    uint32_t m_nBodySize;   // Chunk Msg Header中的 msg length，指数据部分的消息长度
     uint32_t m_nBytesRead;
     RTMPChunk *m_chunk;
-    char *m_body;
+    char *m_body;  //AMF数据部分
   } RTMPPacket;
 
   typedef struct RTMPSockBuf
