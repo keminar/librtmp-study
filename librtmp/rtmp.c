@@ -1617,9 +1617,9 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 05 06 07 服务器保留
    * 
    * Chunk Msg Header 也为可变长度，取值分别为11个字节，7字节，3字节，分为4个部分
-   * TIMER 3个字节，时间戳，AMFSize 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
+   * TIMER 3个字节，时间戳，body Size 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
    * TIMER 存的是相邻两个分片的相对时间戳
-   * AMFSize 代表整个AMF长度，可包括多个RTMP封包，连续的RTMP封包的包头为1个字节
+   * body Size 代表整个AMF长度，可包括多个RTMP封包，连续的RTMP封包的包头为1个字节
    * packet Type 常见数据类型如下：
    * 0x01 |  Chunk Size |
    * 0x03 |  Bytes Read Report|
@@ -1641,11 +1641,11 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * Chunk Msg Header后面是扩展时间字段 4个字节,只有当Msg Header头中的普通时间戳设置为0x00ffffff 时，本字段才被传送
    * 如果普通时间戳的值小于0x00ffffff，那么本字段一定不能出现
    */
-  packet.m_nChannel = 0x03; /* control channel (invoke) */ //块流ID 
+  packet.m_nChannel = 0x03; /* control channel (invoke) */ //通过设置ChannelID来设置Basic stream id的长度和值
   packet.m_headerType = RTMP_PACKET_SIZE_LARGE;//  Basic header的head type为0，表明msg header长度为11字节
   packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为20，表示为Invoke方法调用
   packet.m_nTimeStamp = 0;// Chunk Msg Header中的时间戳
-  packet.m_nInfoField2 = 0;// Chunk Msg Header中的消息流id StreamID
+  packet.m_nInfoField2 = 0;// Chunk Msg Header中的消息流id Msg StreamID
   packet.m_hasAbsTimestamp = 0;// 相对时间
   packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;//跳过包头，指到包体位置
 
@@ -4058,7 +4058,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
     // m_body是指向负载数据首地址的指针；“-”号用于指针前移
     // 块头的首指针
     header = packet->m_body - nSize;
-    // 块头的尾指针
+    // 块头的尾指针, 为了后面计算会不会溢出的
     hend = packet->m_body;
   }
   else
