@@ -1583,6 +1583,7 @@ static int
 SendConnectPacket(RTMP *r, RTMPPacket *cp)
 {
   RTMPPacket packet;
+  // 定义一个buf数组，pend指到数组的尾部
   char pbuf[4096], *pend = pbuf + sizeof(pbuf);
   char *enc;
 
@@ -1633,9 +1634,9 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
   packet.m_headerType = RTMP_PACKET_SIZE_LARGE;// Head_Type，包头长度为12字节
   packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为14，表示为Invoke方法调用
   packet.m_nTimeStamp = 0;// 时间戳
-  packet.m_nInfoField2 = 0;// 消息流id
+  packet.m_nInfoField2 = 0;// 消息流id StreamID
   packet.m_hasAbsTimestamp = 0;// 相对时间
-  packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+  packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;//跳过包头，指到包体位置
 
   /**
    * RTMP封包除去包头部分，其它的是AMF数据部分，AMF数据里可以是命令也可以是音视频数据
@@ -1645,14 +1646,14 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 0x05 NULL,          0x06 UNDEFINED,    0x07 REFERENCE,    0x08 MIXED_ARRAY
    * 0x09 END_OF_OBJECT, 0x0A ARRAY,        0x0B DATE,         0xC LONG_STRING
    * 0xD UNSUPPORTED,    0xE RECORDSET,     0xF XML,           0x10 CLASS_OBJECT
-   * 0x11 AMF3_OBJECT
+   * 0x11 AMF3_OBJECT,   0x00 NUMBER
    */
-  enc = packet.m_body;
-  enc = AMF_EncodeString(enc, pend, &av_connect);//将"connnect"字符串采用AMF0编码
-  enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);
-  *enc++ = AMF_OBJECT;// 接下来是AMF对象，内含多个属性编码
+  enc = packet.m_body;//新指针指到包体开始位置
+  enc = AMF_EncodeString(enc, pend, &av_connect);//AMF string类型，将"connnect"字符串采用AMF0编码
+  enc = AMF_EncodeNumber(enc, pend, ++r->m_numInvokes);//AMF NUMBER类型，调用Invoke函数次数，从0开始累加
+  *enc++ = AMF_OBJECT;// 接下来是AMF对象，内含多个KEY=>VALUE属性编码
 
-  enc = AMF_EncodeNamedString(enc, pend, &av_app, &r->Link.app);// 编码客户端要连接到的服务应用名
+  enc = AMF_EncodeNamedString(enc, pend, &av_app, &r->Link.app);// 编码客户端要连接到的服务应用名 app=xxx
   if (!enc)
     return FALSE;
   if (r->Link.protocol & RTMP_FEATURE_WRITE)
@@ -1712,6 +1713,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
     if (!enc)
       return FALSE;
   }
+  // 检查加上OBJECT结尾的3个字节会不会溢出
   if (enc + 3 >= pend)
     return FALSE;
     // AMF对象结束标志(0x00000009表示OBJECT嵌套结束)
@@ -1729,6 +1731,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
     if (!enc)
       return FALSE;
   }
+  // 额外设置
   if (r->Link.extras.o_num)
   {
     int i;
@@ -1739,6 +1742,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
         return FALSE;
     }
   }
+  // 计算并写入包体大小
   packet.m_nBodySize = enc - packet.m_body;
 
   return RTMP_SendPacket(r, &packet, TRUE);

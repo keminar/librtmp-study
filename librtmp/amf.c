@@ -131,6 +131,7 @@ int AMF_DecodeBoolean(const char *data)
   return *data != 0;
 }
 
+// 把nVal转大端字节序并存入output
 char *
 AMF_EncodeInt16(char *output, char *outend, short nVal)
 {
@@ -170,23 +171,28 @@ AMF_EncodeInt32(char *output, char *outend, int nVal)
 char *
 AMF_EncodeString(char *output, char *outend, const AVal *bv)
 {
+  // 检查加上字符串会不会超过总长度
   if ((bv->av_len < 65536 && output + 1 + 2 + bv->av_len > outend) ||
       output + 1 + 4 + bv->av_len > outend)
     return NULL;
 
   if (bv->av_len < 65536)
   {
+    // 写上字符串类型（AMFType）
     *output++ = AMF_STRING;
-
+    // 将内容长度av_len大端转换并写入output
     output = AMF_EncodeInt16(output, outend, bv->av_len);
   }
   else
   {
+    //长字符串类型
     *output++ = AMF_LONG_STRING;
 
     output = AMF_EncodeInt32(output, outend, bv->av_len);
   }
+  // 写上bv的内容
   memcpy(output, bv->av_val, bv->av_len);
+  // 指针位置移到尾部
   output += bv->av_len;
 
   return output;
@@ -195,9 +201,11 @@ AMF_EncodeString(char *output, char *outend, const AVal *bv)
 char *
 AMF_EncodeNumber(char *output, char *outend, double dVal)
 {
+  //检查溢出
   if (output + 1 + 8 > outend)
     return NULL;
 
+  // 写上类型
   *output++ = AMF_NUMBER; /* type: Number */
 
 #if __FLOAT_WORD_ORDER == __BYTE_ORDER
@@ -271,11 +279,15 @@ AMF_EncodeNamedString(char *output, char *outend, const AVal *strName, const AVa
 {
   if (output + 2 + strName->av_len > outend)
     return NULL;
+  // strName就是AMF数据的ObjType
+  // 存入strName的长度  
   output = AMF_EncodeInt16(output, outend, strName->av_len);
-
+  // 存入strName的值
   memcpy(output, strName->av_val, strName->av_len);
   output += strName->av_len;
 
+  // strValue是AMF数据的ObjValue
+  // 存入strValue
   return AMF_EncodeString(output, outend, strValue);
 }
 
@@ -359,17 +371,21 @@ AMFProp_Encode(AMFObjectProperty *prop, char *pBuffer, char *pBufEnd)
   if (prop->p_type == AMF_INVALID)
     return NULL;
 
+  // 检查类型，检查溢出
   if (prop->p_type != AMF_NULL && pBuffer + prop->p_name.av_len + 2 + 1 >= pBufEnd)
     return NULL;
 
   if (prop->p_type != AMF_NULL && prop->p_name.av_len)
   {
+    //写入prop的p_name长度
     *pBuffer++ = prop->p_name.av_len >> 8;
     *pBuffer++ = prop->p_name.av_len & 0xff;
+    //写入prop的p_name内容
     memcpy(pBuffer, prop->p_name.av_val, prop->p_name.av_len);
     pBuffer += prop->p_name.av_len;
   }
 
+  // 根据type写入对应prop的p_vu数据
   switch (prop->p_type)
   {
   case AMF_NUMBER:

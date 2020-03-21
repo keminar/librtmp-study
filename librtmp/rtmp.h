@@ -112,12 +112,12 @@ extern "C"
 
   typedef struct RTMPPacket
   {
-    uint8_t m_headerType;
-    uint8_t m_packetType;
+    uint8_t m_headerType;//channelID
+    uint8_t m_packetType;//AMFType
     uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
     int m_nChannel;
     uint32_t m_nTimeStamp;	/* timestamp */
-    int32_t m_nInfoField2;	/* last 4 bytes in a long header */
+    int32_t m_nInfoField2;	/* last 4 bytes in a long header */ //StreamID
     uint32_t m_nBodySize;
     uint32_t m_nBytesRead;
     RTMPChunk *m_chunk;
