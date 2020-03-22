@@ -3679,8 +3679,11 @@ EncodeInt32LE(char *output, int nVal)
   return 4;
 }
 
+// https://blog.csdn.net/lucyTheSlayer/article/details/79788561
+//读取包信息
 int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 {
+  //一个字节8位，header最大长度18
   uint8_t hbuf[RTMP_MAX_HEADER_SIZE] = {0};
   char *header = (char *)hbuf;
   int nSize, hSize, nToRead, nChunk;
@@ -3689,29 +3692,38 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 
   RTMP_Log(RTMP_LOGDEBUG2, "%s: fd=%d", __FUNCTION__, r->m_sb.sb_socket);
 
+  //读第一字节
   if (ReadN(r, (char *)hbuf, 1) == 0)
   {
     RTMP_Log(RTMP_LOGERROR, "%s, failed to read RTMP packet header", __FUNCTION__);
     return FALSE;
   }
 
+  //解析第一字节的headType和channelID
   packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
   packet->m_nChannel = (hbuf[0] & 0x3f);
+  //跳过第一字节
   header++;
+  //检查basic stream id是0，则basic header占2个字节
   if (packet->m_nChannel == 0)
   {
+    //再读1个字节
     if (ReadN(r, (char *)&hbuf[1], 1) != 1)
     {
       RTMP_Log(RTMP_LOGERROR, "%s, failed to read RTMP packet header 2nd byte",
                __FUNCTION__);
       return FALSE;
     }
+    // 重新给channelID赋值
     packet->m_nChannel = hbuf[1];
     packet->m_nChannel += 64;
+    // 跳过basic streamid
     header++;
   }
+  //检查basic stream id是0，则basic header占3个字节
   else if (packet->m_nChannel == 1)
   {
+    //再读2个字节
     int tmp;
     if (ReadN(r, (char *)&hbuf[1], 2) != 2)
     {
@@ -3719,47 +3731,65 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
                __FUNCTION__);
       return FALSE;
     }
+    // 重新给channelID赋值
     tmp = (hbuf[2] << 8) + hbuf[1];
     packet->m_nChannel = tmp + 64;
     RTMP_Log(RTMP_LOGDEBUG, "%s, m_nChannel: %0x", __FUNCTION__, packet->m_nChannel);
+    // 跳过basic streamid
     header += 2;
   }
 
+  // 取head type + msg header长度
   nSize = packetSize[packet->m_headerType];
 
+  //如果这种channelId未读到过
   if (packet->m_nChannel >= r->m_channelsAllocatedIn)
   {
+    //申请内存
     int n = packet->m_nChannel + 10;
     int *timestamp = realloc(r->m_channelTimestamp, sizeof(int) * n);
+    //二维数组
     RTMPPacket **packets = realloc(r->m_vecChannelsIn, sizeof(RTMPPacket *) * n);
+    //申请内存失败，释放之前的内存
     if (!timestamp)
       free(r->m_channelTimestamp);
     if (!packets)
       free(r->m_vecChannelsIn);
+    //失败写入NULL值，成功写入对应的内存，完美
     r->m_channelTimestamp = timestamp;
     r->m_vecChannelsIn = packets;
+    //内存失败返回
     if (!timestamp || !packets)
     {
       r->m_channelsAllocatedIn = 0;
       return FALSE;
     }
+    //内存初始化为0
     memset(r->m_channelTimestamp + r->m_channelsAllocatedIn, 0, sizeof(int) * (n - r->m_channelsAllocatedIn));
     memset(r->m_vecChannelsIn + r->m_channelsAllocatedIn, 0, sizeof(RTMPPacket *) * (n - r->m_channelsAllocatedIn));
+    //记录申请过内存
     r->m_channelsAllocatedIn = n;
   }
 
+  // 如果head type + msg header长12
   if (nSize == RTMP_LARGE_HEADER_SIZE) /* if we get a full header the timestamp is absolute */
     packet->m_hasAbsTimestamp = TRUE;
 
+  //如果head type + msg header长小于12
   else if (nSize < RTMP_LARGE_HEADER_SIZE)
-  { /* using values from the last message of this channel */
+  { 
+    // 取同channel上一个消息的值
+    /* using values from the last message of this channel */
     if (r->m_vecChannelsIn[packet->m_nChannel])
       memcpy(packet, r->m_vecChannelsIn[packet->m_nChannel],
              sizeof(RTMPPacket));
   }
 
+  //因为header指针已经跳过了basic header，
+  //nSize初始值有多加一个header type,所以-1才是msg header的长度
   nSize--;
 
+  //读取msg header ，如果msg header为0 时不读
   if (nSize > 0 && ReadN(r, header, nSize) != nSize)
   {
     RTMP_Log(RTMP_LOGERROR, "%s, failed to read RTMP packet header. type: %x",
@@ -3767,44 +3797,58 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
     return FALSE;
   }
 
+  // msg header + basic header 为总的header长度
   hSize = nSize + (header - (char *)hbuf);
 
+  // 如果msg header长度>=3
   if (nSize >= 3)
   {
+    //则取时间戳
     packet->m_nTimeStamp = AMF_DecodeInt24(header);
 
     /*RTMP_Log(RTMP_LOGDEBUG, "%s, reading RTMP packet chunk on channel %x, headersz %i, timestamp %i, abs timestamp %i", __FUNCTION__, packet.m_nChannel, nSize, packet.m_nTimeStamp, packet.m_hasAbsTimestamp); */
-
+    // 如果msg header 长度 >=6 
     if (nSize >= 6)
     {
+      //取body size
       packet->m_nBodySize = AMF_DecodeInt24(header + 3);
       packet->m_nBytesRead = 0;
 
       if (nSize > 6)
       {
+        // 取packet type
         packet->m_packetType = header[6];
 
+        // 如果msg header 长度 >=6 完整的msg header
         if (nSize == 11)
+          // 取msg streamID
           packet->m_nInfoField2 = DecodeInt32LE(header + 7);
       }
     }
   }
 
+  // 根据时间戳值判断是否有扩展时间
   extendedTimestamp = packet->m_nTimeStamp == 0xffffff;
+  //如果有扩展时间
   if (extendedTimestamp)
   {
+    //取4字节
     if (ReadN(r, header + nSize, 4) != 4)
     {
       RTMP_Log(RTMP_LOGERROR, "%s, failed to read extended timestamp",
                __FUNCTION__);
       return FALSE;
     }
+    // 取出扩展时间，也是放入到m_nTimeStamp变量（所以要注意根据值大小区分）
     packet->m_nTimeStamp = AMF_DecodeInt32(header + nSize);
+    // 总header长度加大4字节
     hSize += 4;
   }
 
+  // 记录日志
   RTMP_LogHexString(RTMP_LOGDEBUG2, (uint8_t *)hbuf, hSize);
 
+  // 如果msg header中的body size记录有值
   if (packet->m_nBodySize > 0 && packet->m_body == NULL)
   {
     if (!RTMPPacket_Alloc(packet, packet->m_nBodySize))
@@ -3812,24 +3856,34 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
       RTMP_Log(RTMP_LOGDEBUG, "%s, failed to allocate packet", __FUNCTION__);
       return FALSE;
     }
+    //标记已申请过内存
     didAlloc = TRUE;
     packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
   }
 
+  // 如果一个packet第一次读取，要通过m_nBytesRead来移动指针
   nToRead = packet->m_nBodySize - packet->m_nBytesRead;
+  // 默认读取大小
   nChunk = r->m_inChunkSize;
+  // 如果剩余不足，取实际长度
   if (nToRead < nChunk)
     nChunk = nToRead;
 
+  // 以下几行是调试用的？
   /* Does the caller want the raw chunk? */
   if (packet->m_chunk)
   {
+    //如果packet->m_chunk有初始化，则记录头部总大小
     packet->m_chunk->c_headerSize = hSize;
+    //记录头部内容
     memcpy(packet->m_chunk->c_header, hbuf, hSize);
+    //记录当前读数据的位置
     packet->m_chunk->c_chunk = packet->m_body + packet->m_nBytesRead;
+    //记录当前读数据的大小
     packet->m_chunk->c_chunkSize = nChunk;
   }
 
+  // 读取数据部分
   if (ReadN(r, packet->m_body + packet->m_nBytesRead, nChunk) != nChunk)
   {
     RTMP_Log(RTMP_LOGERROR, "%s, failed to read RTMP packet body. len: %u",
@@ -3839,25 +3893,33 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 
   RTMP_LogHexString(RTMP_LOGDEBUG2, (uint8_t *)packet->m_body + packet->m_nBytesRead, nChunk);
 
+  // 记录已读取的长度，方便下次读取好跳过此部分
   packet->m_nBytesRead += nChunk;
 
+  // 保存此种channel类型数据，如果没保存过先申请内存
   /* keep the packet as ref for other packets on this channel */
   if (!r->m_vecChannelsIn[packet->m_nChannel])
     r->m_vecChannelsIn[packet->m_nChannel] = malloc(sizeof(RTMPPacket));
+  // 覆盖保存数据  
   memcpy(r->m_vecChannelsIn[packet->m_nChannel], packet, sizeof(RTMPPacket));
+  // 如果有使用扩展时间，记录上次时间为固定值0xffffff
   if (extendedTimestamp)
   {
     r->m_vecChannelsIn[packet->m_nChannel]->m_nTimeStamp = 0xffffff;
   }
 
+  // 如果数据包全读取完
   if (RTMPPacket_IsReady(packet))
   {
+    //如果不是绝对时间将相对时间转换为绝对时间
     /* make packet's timestamp absolute */
     if (!packet->m_hasAbsTimestamp)
       packet->m_nTimeStamp += r->m_channelTimestamp[packet->m_nChannel]; /* timestamps seem to be always relative!! */
 
+    // 记录上次的绝对时间
     r->m_channelTimestamp[packet->m_nChannel] = packet->m_nTimeStamp;
 
+    //将channel保存的读取完成的packet的m_body置为null，也告诉下次函数调用是在接收一个新的packet。
     /* reset the data from the stored packet. we keep the header since we may use it later if a new packet for this channel */
     /* arrives and requests to re-use some info (small packet header) */
     r->m_vecChannelsIn[packet->m_nChannel]->m_body = NULL;
@@ -3866,6 +3928,7 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
   }
   else
   {
+    //重置body指针值，当后面进行free操作时，已读内容不会被擦除
     packet->m_body = NULL; /* so it won't be erased on free */
   }
 
