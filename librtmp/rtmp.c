@@ -1598,16 +1598,28 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * +-------------+------------------+--------------------+------------+
    */
   /**
-   * https://wenku.baidu.com/view/cdc944114afe04a1b171de86.html
-   * https://blog.csdn.net/xwjazjx1314/article/details/54863428
+   * 学习地址
+   * https://wenku.baidu.com/view/cdc944114afe04a1b171de86.html (有部分错误)
+   * https://blog.csdn.net/xwjazjx1314/article/details/54863428 (推荐)
+   * https://blog.csdn.net/xwjazjx1314/article/details/54693766 (推荐)
    * 
-   * Basic header头部包括两个部分，第一部分为head type占前两个Bit, 决定Chunk Msg Header的长度，关系如下
+   * Basic header头部包括两个部分
+   * 第一部分为head type占前两个Bit, 决定Chunk Msg Header的长度，关系如下
    * 前两位是00，则Msg Header长度为11字长，前两个是01，则Msg Header长度为7字节（无StreamID）
    * 前两位是10，则Msg Header长度为3字长（只有首字节和时间戳），前两个是11，则Msg Header长度为0字节
    * 
    * 第二部分为Basic stream id为可变长度，最短6个Bit和head_type共同占一个字节，取值范围3－63
-   * 中间长度为6个Bit加一个字节，取值范围为64-319(2的8次方+63)，则Basic header占2字节
-   * 最大长度为6个Bit加两个字节，取值范围为320-65599(2的16次方+63)，则Basic header占3字节
+   * +----------+---------------------+
+   * |type(2Bit)|Basic stream id(6Bit)|
+   * +----------+---------------------+
+   * 中间长度为6个Bit为000000外加一个字节，取值范围为64-319(2的8次方+63)，则Basic header占2字节
+   * +----------+------------+----------------------+
+   * |type(2Bit)|000000(6Bit)|Basic stream id(1字节)|
+   * +----------+------------+----------------------+
+   * 最大长度为6个Bit为000001外加两个字节，取值范围为64-65599(2的16次方+63)，则Basic header占3字节
+   * +----------+------------+------------------------------+
+   * |type(2Bit)|000001(6Bit)|Basic stream id(2字节)        |
+   * +----------+------------+------------------------------+
    * 整个Basic header 通过将head type和Basic stream id运算为一个ChannelID赋值
    * 
    * ChannelID 用途（可以认为是Basic header）
@@ -1617,8 +1629,17 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 05 06 07 服务器保留
    * 
    * Chunk Msg Header 也为可变长度，取值分别为11个字节，7字节，3字节，分为4个部分
-   * TIMER 3个字节，时间戳，body Size 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
-   * TIMER 存的是相邻两个分片的相对时间戳
+   * timestamp 3个字节，时间戳，body Size 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
+   * +-----------------+----------------+--------------------+-------------------------+
+   * |timestamp(3字节) |body size(3字节) | packet type(1字节) | msg streamID (4字节)    |
+   * +-----------------+----------------+--------------------+-------------------------+
+   * +-----------------+----------------+--------------------+
+   * |timestamp(3字节) |body size(3字节) | packet type(1字节) |
+   * +-----------------+----------------+--------------------+
+   * +-----------------+
+   * |timestamp(3字节) |
+   * +-----------------+
+   * timestamp 存的是相邻两个分片的相对时间戳
    * body Size 代表整个AMF长度，可包括多个RTMP封包，连续的RTMP封包的包头为1个字节
    * packet Type 常见数据类型如下：
    * 0x01 |  Chunk Size |
@@ -1651,7 +1672,12 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
 
   /**
    * RTMP封包除去包头部分，其它的是AMF数据部分，AMF数据里可以是命令也可以是音视频数据
-   * AMF又分为两个部分，ObjType大小为一个字节和ObjValue大小不固定，ObjValue里可以是另一个AMF数据
+   * AMF又分为两个部分，ObjType（一个字节）, ObjValue（大小不确定），ObjValue里可以是另一个AMF数据
+   * ObjValue双分为data size(占用和objType有关，可能为空) 和ObjData大小由data size决定
+   * 
+   * +--------+-----------+----------+
+   * |ObjType | data size | ObjData |
+   * +--------+-----------+----------+
    * ObjType 数据类型如下
    * 0x00 NUMBER,        0x01 BOOLEAN,      0x02 STRING,       0x03 OBJECT,       
    * 0x04 MOVIECLIP (保留，无用)
@@ -1660,6 +1686,23 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 0xE RECORDSET (保留，无用)
    * 0xF XML_DOC,        0x10 TYPED_OBJECT
    * 0x11 AVMPLUS (switch to AMF3)
+   * 常见data size和objData大小如下
+   * +--------+---------------------------------+----------------------------+
+   * |ObjType |dataSize本身占用空间              | objData占用                |
+   * +--------+---------------------------------+----------------------------+
+   * |String  |2字节                            |由dataSize值确定             |
+   * +--------+---------------------------------+----------------------------+
+   * |Object  |0字节（以0x00000009表示嵌套结束）  |  动态计算                  |
+   * +--------+---------------------------------+----------------------------+
+   * |NULL    |0字节                            |                            |
+   * +--------+---------------------------------+----------------------------+
+   * |NUMBER  |0字节                            |  8字节                     |
+   * +------------------------------------------+----------------------------+
+   * |MAP     |2字节(key长度)+x字节(key内容)     |                           | 
+   * +--------+---------------------------------+----------------------------+
+   * |BOOLEAN |0字节                            |  1字节                     |
+   * +--------+---------------------------------+----------------------------+
+   * 
    */
   enc = packet.m_body;//新指针指到包体开始位置
   enc = AMF_EncodeString(enc, pend, &av_connect);//AMF string类型，将"connnect"字符串采用AMF0编码

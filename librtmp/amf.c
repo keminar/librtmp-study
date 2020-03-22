@@ -171,7 +171,7 @@ AMF_EncodeInt32(char *output, char *outend, int nVal)
 char *
 AMF_EncodeString(char *output, char *outend, const AVal *bv)
 {
-  // 检查加上字符串会不会超过总长度
+  // 检查加上字符串会不会超过总长度,1为type长度，2为datasize长度
   if ((bv->av_len < 65536 && output + 1 + 2 + bv->av_len > outend) ||
       output + 1 + 4 + bv->av_len > outend)
     return NULL;
@@ -201,7 +201,7 @@ AMF_EncodeString(char *output, char *outend, const AVal *bv)
 char *
 AMF_EncodeNumber(char *output, char *outend, double dVal)
 {
-  //检查溢出
+  //检查溢出，1为type长度，8为objvalue长度
   if (output + 1 + 8 > outend)
     return NULL;
 
@@ -264,6 +264,7 @@ AMF_EncodeNumber(char *output, char *outend, double dVal)
 char *
 AMF_EncodeBoolean(char *output, char *outend, int bVal)
 {
+  //检查溢出，1为type长度，1为objvalue长度
   if (output + 2 > outend)
     return NULL;
 
@@ -274,9 +275,11 @@ AMF_EncodeBoolean(char *output, char *outend, int bVal)
   return output;
 }
 
+// MAP类型，值string
 char *
 AMF_EncodeNamedString(char *output, char *outend, const AVal *strName, const AVal *strValue)
 {
+  // 2为strName的长度的占用
   if (output + 2 + strName->av_len > outend)
     return NULL;
   // strName就是AMF数据的ObjType
@@ -291,6 +294,7 @@ AMF_EncodeNamedString(char *output, char *outend, const AVal *strName, const AVa
   return AMF_EncodeString(output, outend, strValue);
 }
 
+// MAP类型，值Number
 char *
 AMF_EncodeNamedNumber(char *output, char *outend, const AVal *strName, double dVal)
 {
@@ -304,6 +308,7 @@ AMF_EncodeNamedNumber(char *output, char *outend, const AVal *strName, double dV
   return AMF_EncodeNumber(output, outend, dVal);
 }
 
+// MAP类型，值Bool
 char *
 AMF_EncodeNamedBoolean(char *output, char *outend, const AVal *strName, int bVal)
 {
