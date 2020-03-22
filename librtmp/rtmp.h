@@ -71,6 +71,7 @@ extern "C"
 
   uint32_t RTMP_GetTime(void);
 
+// msg header中的packet type值
 /*      RTMP_PACKET_TYPE_...                0x00 */
 #define RTMP_PACKET_TYPE_CHUNK_SIZE         0x01
 /*      RTMP_PACKET_TYPE_...                0x02 */
@@ -111,23 +112,23 @@ extern "C"
 
   typedef struct RTMPChunk
   {
-    int c_headerSize;
-    int c_chunkSize;
-    char *c_chunk;
-    char c_header[RTMP_MAX_HEADER_SIZE];
+    int c_headerSize; //记录头部总大小
+    int c_chunkSize; //记录当前读数据的大小
+    char *c_chunk;//记录当前读数据的位置
+    char c_header[RTMP_MAX_HEADER_SIZE];//记录头部内容
   } RTMPChunk;
 
   typedef struct RTMPPacket
   {
     uint8_t m_headerType; //basic header 中的type头字节，值为（0，1，2，3）
     uint8_t m_packetType; // Chunk Msg Header中的package Type类型
-    uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */
+    uint8_t m_hasAbsTimestamp;	/* timestamp absolute or relative? */ /* Timestamp 是绝对值还是相对值? */  //用于收消息时
     int m_nChannel;  //通过设置ChannelID来设置Basic stream id的长度和值
-    uint32_t m_nTimeStamp;	/* timestamp */ //Chunk Msg Header中的时间戳
+    uint32_t m_nTimeStamp;	/* timestamp */ //Chunk Msg Header中的时间戳， 完整包时为绝对时间，非完整时为相对时间？
     int32_t m_nInfoField2;	/* last 4 bytes in a long header */ //Chunk Msg Header中msg StreamID
-    uint32_t m_nBodySize;   // Chunk Msg Header中的 msg length，指数据部分的消息长度
-    uint32_t m_nBytesRead;
-    RTMPChunk *m_chunk;
+    uint32_t m_nBodySize;   // Chunk Msg Header中的 msg length，指数据部分的消息总长度
+    uint32_t m_nBytesRead;  // 已读取长度
+    RTMPChunk *m_chunk;     // 调试用结构体
     char *m_body;  //AMF数据部分
   } RTMPPacket;
 
@@ -146,6 +147,7 @@ extern "C"
   int RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize);
   void RTMPPacket_Free(RTMPPacket *p);
 
+// 是否数据包全读取完
 #define RTMPPacket_IsReady(a)	((a)->m_nBytesRead == (a)->m_nBodySize)
 
   typedef struct RTMP_LNK
