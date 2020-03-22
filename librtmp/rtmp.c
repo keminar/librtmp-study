@@ -1608,7 +1608,8 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 前两位是00，则Msg Header长度为11字长，前两个是01，则Msg Header长度为7字节（无StreamID）
    * 前两位是10，则Msg Header长度为3字长（只有首字节和时间戳），前两个是11，则Msg Header长度为0字节
    * 
-   * 第二部分为Basic stream id为可变长度，最短6个Bit和head_type共同占一个字节，取值范围3－63
+   * 第二部分为Basic stream id为可变长度，最短6个Bit和head_type共同占一个字节，取值范围2－63
+   * 0 和 1被占用，为了代表Basic stream id的不同长度
    * +----------+---------------------+
    * |type(2Bit)|Basic stream id(6Bit)|
    * +----------+---------------------+
@@ -1620,7 +1621,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * +----------+------------+------------------------------+
    * |type(2Bit)|000001(6Bit)|Basic stream id(2字节)        |
    * +----------+------------+------------------------------+
-   * 整个Basic header 通过将head type和Basic stream id运算为一个ChannelID赋值
+   * 通过将Basic stream id的值做为一个ChannelID值
    * 
    * ChannelID 用途（可以认为是Basic header）
    * 02 Ping, ByteRead通道
@@ -3680,11 +3681,13 @@ EncodeInt32LE(char *output, int nVal)
 }
 
 // https://blog.csdn.net/lucyTheSlayer/article/details/79788561
+// https://blog.csdn.net/leixiaohua1020/article/details/12957877
 //读取包信息
 int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 {
   //一个字节8位，header最大长度18
   uint8_t hbuf[RTMP_MAX_HEADER_SIZE] = {0};
+  //header 指向的是从Socket中收下来的数据
   char *header = (char *)hbuf;
   int nSize, hSize, nToRead, nChunk;
   int didAlloc = FALSE;
@@ -3701,6 +3704,7 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
 
   //解析第一字节的headType和channelID
   packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
+  //先计算只占6个Bit的块流id (2-63)
   packet->m_nChannel = (hbuf[0] & 0x3f);
   //跳过第一字节
   header++;
@@ -3714,13 +3718,13 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
                __FUNCTION__);
       return FALSE;
     }
-    // 重新给channelID赋值
+    // 重新给channelID赋值（64-319）
     packet->m_nChannel = hbuf[1];
     packet->m_nChannel += 64;
     // 跳过basic streamid
     header++;
   }
-  //检查basic stream id是0，则basic header占3个字节
+  //检查basic stream id是1，则basic header占3个字节
   else if (packet->m_nChannel == 1)
   {
     //再读2个字节
@@ -3731,7 +3735,7 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
                __FUNCTION__);
       return FALSE;
     }
-    // 重新给channelID赋值
+    // 重新给channelID赋值（64-65599）
     tmp = (hbuf[2] << 8) + hbuf[1];
     packet->m_nChannel = tmp + 64;
     RTMP_Log(RTMP_LOGDEBUG, "%s, m_nChannel: %0x", __FUNCTION__, packet->m_nChannel);
@@ -3771,7 +3775,7 @@ int RTMP_ReadPacket(RTMP *r, RTMPPacket *packet)
     r->m_channelsAllocatedIn = n;
   }
 
-  // 如果head type + msg header长12
+  // 如果head type + msg header长12，此时msg header中的timestamp为绝对值
   if (nSize == RTMP_LARGE_HEADER_SIZE) /* if we get a full header the timestamp is absolute */
     packet->m_hasAbsTimestamp = TRUE;
 
