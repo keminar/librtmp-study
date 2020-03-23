@@ -4160,7 +4160,7 @@ int RTMP_SendPacket(RTMP *r, RTMPPacket *packet, int queue)
   nSize = packetSize[packet->m_headerType];
   hSize = nSize;
   cSize = 0;
-  // 时间戳增量
+  // 时间戳增量 ，有个小问题 https://github.com/thatguystone/rtmpdump/issues/5 暂不按着改，先mark下
   t = packet->m_nTimeStamp - last;
 
   if (packet->m_body)

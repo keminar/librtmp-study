@@ -16,7 +16,15 @@ Handshake -> connect-> _result -> releaseStream -> FCPublish -> createStream -> 
 
 rtmpsuck
 ==
-RTMP拉流代理
+RTMP本地代理，需要结合iptables才能使用，用iptables将浏览器请求的外部服务器1935端口的TCP流 重定向
+
+到本地的rtmpsuck代理 ，rtmpsuck解析出请求出的参数信息以供rtmpdump使用。
+```
+#添加规则
+iptables -t nat -A OUTPUT -p tcp --dport 1935 -m owner \! --uid-owner root  -j REDIRECT
+#移除之前添加的规则
+iptables -t nat -D OUTPUT -p tcp --dport 1935 -m owner \! --uid-owner root -j REDIRECT
+```
 
 examples
 ==
