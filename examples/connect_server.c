@@ -72,7 +72,7 @@ void handshake_server(int clnt_sock)
     int bMatch;
     int i;
 
-        //从客户端接收 c0c1
+    //从客户端接收 c0c1
     if (read(clnt_sock, c0c1, sizeof(c0c1)) == 0) {
         error_handling("read c0c1 error");
     }
@@ -115,7 +115,7 @@ void handshake_server(int clnt_sock)
     //初始化s1的最后1528个字节为随机数
     printf("S1 Rand: ");
     for (i=8; i<RTMP_SIG_SIZE; i++) {
-        s1s2[i] = (char)(rand() % 256);
+        s1s2[i] = (char)(rand() % 256);//'a';
         printf("%d.", s1s2[i]);
     }
     printf("\n\n");
@@ -131,8 +131,8 @@ void handshake_server(int clnt_sock)
     //发送 s0s1s2 到客户端
     write(clnt_sock, s0s1s2, sizeof(s0s1s2));
     
-    //从客户端接收 c2
-    if (read(clnt_sock, c2, sizeof(c0c1)) == 0) {
+    //从客户端接收 c2, 注意长度
+    if (read(clnt_sock, c2, RTMP_SIG_SIZE) == 0) {
         error_handling("read c2 error");
     }
     // 将c1前4位时间取出
@@ -170,7 +170,15 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
   if (nBytes == -1) {
       error_handling("recv returned");
   }
-  printf("%d", hbuf);
+
+  packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
+  packet->m_nChannel = (hbuf[0] & 0x3f);
+  printf("%d, %d\n", (int)packet->m_headerType, packet->m_nChannel);
+  header++;
+  recv(clnt_sock, header, 11, 0);
+  //packet->m_nTimeStamp = header;
+
+  return 0;
 }
 
 int main(int argc, char *argv[])

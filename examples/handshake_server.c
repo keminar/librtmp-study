@@ -167,8 +167,8 @@ int main(int argc, char *argv[])
     //发送 s0s1s2 到客户端
     write(clnt_sock, s0s1s2, sizeof(s0s1s2));
     
-    //从客户端接收 c2
-    if (read(clnt_sock, c2, sizeof(c0c1)) == 0) {
+    //从客户端接收 c2, 注意长度
+    if (read(clnt_sock, c2, RTMP_SIG_SIZE) == 0) {
         error_handling("read c2 error");
     }
     // 将c1前4位时间取出

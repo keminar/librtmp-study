@@ -1596,12 +1596,15 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * +-------------+------------------+--------------------+------------+
    * |Basic header | Chunk Msg Header |Extended Time Stamp | Chunk Data |
    * +-------------+------------------+--------------------+------------+
+   * |                                                     |
+   * |<---------------------Chunk Header------------------>|
    */
   /**
    * 学习地址
    * https://wenku.baidu.com/view/cdc944114afe04a1b171de86.html (有部分错误)
    * https://blog.csdn.net/xwjazjx1314/article/details/54863428 (推荐)
    * https://blog.csdn.net/xwjazjx1314/article/details/54693766 (推荐)
+   * https://blog.csdn.net/noahsun1024/article/details/52177007
    * 
    * Basic header头部包括两个部分
    * 第一部分为head type占前两个Bit, 决定Chunk Msg Header的长度，关系如下

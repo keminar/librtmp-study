@@ -13,3 +13,4 @@ examples/dump_flv
 examples/test.flv
 examples/receive.flv
 examples/handshake_server
+examples/connect_server
