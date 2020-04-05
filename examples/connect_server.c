@@ -18,17 +18,55 @@
 // 握手中随机数的长度（C1,C2,S1,S2）长度
 #define RTMP_SIG_SIZE 1536
 
-// 显示错误
-void error_handling(char *message);
-
-void handshake_server(int clnt_sock);
-
 typedef struct AVal
   {
     char *av_val;
     int av_len;
   } AVal;
 #define AVC(str)	{str,sizeof(str)-1}
+#define AVMATCH(a1,a2)	((a1)->av_len == (a2)->av_len && !memcmp((a1)->av_val,(a2)->av_val,(a1)->av_len))
+
+typedef enum
+{ AMF_NUMBER = 0, AMF_BOOLEAN, AMF_STRING, AMF_OBJECT,
+  AMF_MOVIECLIP,		/* reserved, not used */
+  AMF_NULL, AMF_UNDEFINED, AMF_REFERENCE, AMF_ECMA_ARRAY, AMF_OBJECT_END,
+  AMF_STRICT_ARRAY, AMF_DATE, AMF_LONG_STRING, AMF_UNSUPPORTED,
+  AMF_RECORDSET,		/* reserved, not used */
+  AMF_XML_DOC, AMF_TYPED_OBJECT,
+  AMF_AVMPLUS,		/* switch to AMF3 */
+  AMF_INVALID = 0xff
+} AMFDataType;
+
+struct AMFObjectProperty;
+
+typedef struct AMFObject
+{
+  int o_num;
+  struct AMFObjectProperty *o_props;
+} AMFObject;
+
+typedef struct AMFObjectProperty
+{
+  AVal p_name;
+  AMFDataType p_type;
+  union
+  {
+    double p_number;
+    AVal p_aval;
+    AMFObject p_object;
+  } p_vu;
+  int16_t p_UTCoffset;
+} AMFObjectProperty;
+
+
+// 显示错误
+void error_handling(char *message);
+
+void handshake_server(int clnt_sock);
+
+int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize);
+void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop);
+int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize);
 
 // 从rtmpdump精简的时间函数，不用跨平台
 uint32_t
@@ -84,6 +122,61 @@ void AMF_DecodeString(const char *data, AVal *bv)
   bv->av_len = AMF_DecodeInt16(data);
   bv->av_val = (bv->av_len > 0) ? (char *)data + 2 : NULL;
 }
+
+int AMF_DecodeBoolean(const char *data)
+{
+  return *data != 0;
+}
+double
+AMF_DecodeNumber(const char *data)
+{
+  double dVal;
+#if __FLOAT_WORD_ORDER == __BYTE_ORDER
+#if __BYTE_ORDER == __BIG_ENDIAN
+  memcpy(&dVal, data, 8);
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
+  unsigned char *ci, *co;
+  ci = (unsigned char *)data;
+  co = (unsigned char *)&dVal;
+  co[0] = ci[7];
+  co[1] = ci[6];
+  co[2] = ci[5];
+  co[3] = ci[4];
+  co[4] = ci[3];
+  co[5] = ci[2];
+  co[6] = ci[1];
+  co[7] = ci[0];
+#endif
+#else
+#if __BYTE_ORDER == __LITTLE_ENDIAN /* __FLOAT_WORD_ORER == __BIG_ENDIAN */
+  unsigned char *ci, *co;
+  ci = (unsigned char *)data;
+  co = (unsigned char *)&dVal;
+  co[0] = ci[3];
+  co[1] = ci[2];
+  co[2] = ci[1];
+  co[3] = ci[0];
+  co[4] = ci[7];
+  co[5] = ci[6];
+  co[6] = ci[5];
+  co[7] = ci[4];
+#else                               /* __BYTE_ORDER == __BIG_ENDIAN && __FLOAT_WORD_ORER == __LITTLE_ENDIAN */
+  unsigned char *ci, *co;
+  ci = (unsigned char *)data;
+  co = (unsigned char *)&dVal;
+  co[0] = ci[4];
+  co[1] = ci[5];
+  co[2] = ci[6];
+  co[3] = ci[7];
+  co[4] = ci[0];
+  co[5] = ci[1];
+  co[6] = ci[2];
+  co[7] = ci[3];
+#endif
+#endif
+  return dVal;
+}
+
 
 // basic header + msg header最大长度
 #define RTMP_MAX_HEADER_SIZE 18
@@ -295,8 +388,114 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     ptr = packet->m_body + 1;
     // 解析method名字
     AMF_DecodeString(ptr, &method);
-    printf("read body len=%d, Invoking=%s\n", nChunk, method.av_val);
+    printf("read body method type=%d, Invoking=%s\n", packet->m_body[0] , method.av_val);
+
+    AMFObject obj;
+    AMF_Decode(&obj, packet->m_body, packet->m_nBodySize);
     return 0;
+}
+
+int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize)
+{
+    int nOriginalSize = nSize;
+    int bError = false;
+
+    obj->o_num = 0;
+    obj->o_props = NULL;
+    while (nSize > 0)
+    {
+      AMFObjectProperty prop;
+      int nRes;
+
+      // 检查是不是obj结束
+      if (nSize >= 3 && AMF_DecodeInt24(pBuffer) == AMF_OBJECT_END)
+      {
+        nSize -= 3;
+        break;
+      }
+
+      if (bError)
+      {
+        printf("DECODING ERROR, IGNORING BYTES UNTIL NEXT KNOWN PATTERN!\n");
+        nSize--;
+        pBuffer++;
+        continue;
+      }
+
+      nRes = AMFProp_Decode(&prop, pBuffer, nSize);
+      if (nRes == -1)
+      {
+        bError = true;
+        continue;
+      }
+      else
+      {
+        nSize -= nRes;
+        if (nSize < 0)
+        {
+          bError = true;
+          continue;
+        }
+        pBuffer += nRes;
+        AMF_AddProp(obj, &prop);
+      }
+    }
+    if (bError)
+      return -1;
+
+    return nOriginalSize - nSize;
+}
+
+void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop)
+{
+  if (!(obj->o_num & 0x0f))
+    obj->o_props =
+        realloc(obj->o_props, (obj->o_num + 16) * sizeof(AMFObjectProperty));
+  memcpy(&obj->o_props[obj->o_num++], prop, sizeof(AMFObjectProperty));
+}
+
+int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize)
+{
+  int nOriginalSize = nSize;
+  //int nRes;
+
+  prop->p_name.av_len = 0;
+  prop->p_name.av_val = NULL;
+  
+  nSize--;
+
+  prop->p_type = *pBuffer++;
+  switch (prop->p_type)
+  {
+  case AMF_NUMBER:
+    if (nSize < 8)
+      return -1;
+    prop->p_vu.p_number = AMF_DecodeNumber(pBuffer);
+    nSize -= 8;
+    break;
+  case AMF_BOOLEAN:
+    if (nSize < 1)
+      return -1;
+    prop->p_vu.p_number = (double)AMF_DecodeBoolean(pBuffer);
+    nSize--;
+    break;
+  case AMF_STRING:
+  {
+    unsigned short nStringSize = AMF_DecodeInt16(pBuffer);
+
+    if (nSize < (long)nStringSize + 2)
+      return -1;
+    AMF_DecodeString(pBuffer, &prop->p_vu.p_aval);
+    nSize -= (2 + nStringSize);
+    break;
+  }
+  default:
+    printf("%s - unknown datatype 0x%02x, @%p\n", __FUNCTION__,
+             prop->p_type, pBuffer - 1);
+    return -1;
+  }
+
+  return nOriginalSize - nSize;
 }
 
 int main(int argc, char *argv[])
