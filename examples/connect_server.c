@@ -18,13 +18,22 @@
 // 握手中随机数的长度（C1,C2,S1,S2）长度
 #define RTMP_SIG_SIZE 1536
 
+// basic header + msg header最大长度
+#define RTMP_MAX_HEADER_SIZE 18
+
+// 字符串结构体
 typedef struct AVal
   {
     char *av_val;
     int av_len;
   } AVal;
+//转换为字符串结构体
 #define AVC(str)	{str,sizeof(str)-1}
+// 字符串结构体比较
 #define AVMATCH(a1,a2)	((a1)->av_len == (a2)->av_len && !memcmp((a1)->av_val,(a2)->av_val,(a1)->av_len))
+
+//定义字符串结构体
+#define SAVC(x) static const AVal av_##x = AVC(#x)
 
 typedef enum
 { AMF_NUMBER = 0, AMF_BOOLEAN, AMF_STRING, AMF_OBJECT,
@@ -37,14 +46,17 @@ typedef enum
   AMF_INVALID = 0xff
 } AMFDataType;
 
+//声明对象
 struct AMFObjectProperty;
 
+//对象key=val
 typedef struct AMFObject
 {
   int o_num;
   struct AMFObjectProperty *o_props;
 } AMFObject;
 
+//定义对象值
 typedef struct AMFObjectProperty
 {
   AVal p_name;
@@ -58,15 +70,41 @@ typedef struct AMFObjectProperty
   int16_t p_UTCoffset;
 } AMFObjectProperty;
 
+//无效对象
+static const AMFObject AMFObj_Invalid = {0, 0};
+
+//rtmp包信息
+typedef struct RTMPPacket
+{
+    uint8_t m_headerType; //basic header 中的type头字节，值为（0，1，2，3） 表示ChunkMsgHeader的类型（4种）
+    int m_nChannel;       //块流ID  ，通过设置ChannelID来设置Basic stream id的长度和值
+
+    uint32_t m_nTimeStamp;                                              // Timestamp  完整包时为绝对时间，非完整时为相对时间？
+    uint32_t m_nBodySize;                                               //指数据部分的消息总长度
+    uint8_t m_packetType;                                               // Chunk Msg Header中的package Type类型
+    int32_t m_nInfoField2; /* last 4 bytes in a long header,消息流ID */ //Chunk Msg Header中msg StreamID
+
+    char *m_body;
+
+    uint32_t m_nBytesRead;                                         //已读取长度
+    uint8_t m_hasAbsTimestamp; /* Timestamp 是绝对值还是相对值? */ //用于收消息时
+} RTMPPacket;
 
 // 显示错误
 void error_handling(char *message);
 
+//握手
 void handshake_server(int clnt_sock);
 
-int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize);
+//反解object
+int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize, int bDecodeName);
+//反解value
+int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize, int bDecodeName);
+//添加到对象
 void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop);
-int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize);
+
+//解析命令参数
+void ServeInvoke(AMFObject *obj);
 
 // 从rtmpdump精简的时间函数，不用跨平台
 uint32_t
@@ -121,6 +159,11 @@ void AMF_DecodeString(const char *data, AVal *bv)
 {
   bv->av_len = AMF_DecodeInt16(data);
   bv->av_val = (bv->av_len > 0) ? (char *)data + 2 : NULL;
+}
+void AMF_DecodeLongString(const char *data, AVal *bv)
+{
+  bv->av_len = AMF_DecodeInt32(data);
+  bv->av_val = (bv->av_len > 0) ? (char *)data + 4 : NULL;
 }
 
 int AMF_DecodeBoolean(const char *data)
@@ -177,27 +220,43 @@ AMF_DecodeNumber(const char *data)
   return dVal;
 }
 
-
-// basic header + msg header最大长度
-#define RTMP_MAX_HEADER_SIZE 18
-
-//rtmp包信息
-typedef struct RTMPPacket
+int AMF_DecodeArray(AMFObject *obj, const char *pBuffer, int nSize,
+                    int nArrayLen, int bDecodeName)
 {
-    uint8_t m_headerType; //basic header 中的type头字节，值为（0，1，2，3） 表示ChunkMsgHeader的类型（4种）
-    int m_nChannel;       //块流ID  ，通过设置ChannelID来设置Basic stream id的长度和值
+  int nOriginalSize = nSize;
+  int bError = false;
 
-    uint32_t m_nTimeStamp;                                              // Timestamp  完整包时为绝对时间，非完整时为相对时间？
-    uint32_t m_nBodySize;                                               //指数据部分的消息总长度
-    uint8_t m_packetType;                                               // Chunk Msg Header中的package Type类型
-    int32_t m_nInfoField2; /* last 4 bytes in a long header,消息流ID */ //Chunk Msg Header中msg StreamID
+  obj->o_num = 0;
+  obj->o_props = NULL;
+  while (nArrayLen > 0)
+  {
+    AMFObjectProperty prop;
+    int nRes;
+    nArrayLen--;
 
-    char *m_body;
+    if (nSize <= 0)
+    {
+      bError = true;
+      break;
+    }
+    nRes = AMFProp_Decode(&prop, pBuffer, nSize, bDecodeName);
+    if (nRes == -1)
+    {
+      bError = true;
+      break;
+    }
+    else
+    {
+      nSize -= nRes;
+      pBuffer += nRes;
+      AMF_AddProp(obj, &prop);
+    }
+  }
+  if (bError)
+    return -1;
 
-    uint32_t m_nBytesRead;                                         //已读取长度
-    uint8_t m_hasAbsTimestamp; /* Timestamp 是绝对值还是相对值? */ //用于收消息时
-} RTMPPacket;
-
+  return nOriginalSize - nSize;
+}
 
 int RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize)
 {
@@ -391,11 +450,90 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     printf("read body method type=%d, Invoking=%s\n", packet->m_body[0] , method.av_val);
 
     AMFObject obj;
-    AMF_Decode(&obj, packet->m_body, packet->m_nBodySize);
+    //反解到object
+    AMF_Decode(&obj, packet->m_body, packet->m_nBodySize, false);
+    //解决命令参数
+    ServeInvoke(&obj);
     return 0;
 }
 
-int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize)
+void ServeInvoke(AMFObject *obj)
+{
+    AMFObject cobj;
+    AVal pname, pval;
+    int i;
+
+    // 定义av_app等变量
+    SAVC(app);
+    SAVC(flashVer);
+    SAVC(swfUrl);
+    SAVC(pageUrl);
+    SAVC(tcUrl);
+    SAVC(audioCodecs);
+    SAVC(videoCodecs);
+    SAVC(objectEncoding);
+
+    // 取得第3个参数
+    if ((&obj->o_props[2])->p_type == AMF_OBJECT)
+      cobj = (&obj->o_props[2])->p_vu.p_object;
+    else
+      cobj = AMFObj_Invalid;
+
+    for (i = 0; i < cobj.o_num; i++)
+    {
+      pname = cobj.o_props[i].p_name;
+      pval.av_val = NULL;
+      pval.av_len = 0;
+      if (cobj.o_props[i].p_type == AMF_STRING)
+        pval = cobj.o_props[i].p_vu.p_aval;
+      if (AVMATCH(&pname, &av_app))
+      {
+        printf("app=%s\n", pval.av_val);
+        pval.av_val = NULL;
+      }
+      else if (AVMATCH(&pname, &av_flashVer))
+      {
+        printf("flashVer=%s\n", pval.av_val);
+        pval.av_val = NULL;
+      }
+      else if (AVMATCH(&pname, &av_swfUrl))
+      {
+        printf("swfUrl=%s\n", pval.av_val);
+        pval.av_val = NULL;
+      }
+      else if (AVMATCH(&pname, &av_tcUrl))
+      {
+        printf("tcUrl=%s\n", pval.av_val);
+        pval.av_val = NULL;
+      }
+      else if (AVMATCH(&pname, &av_pageUrl))
+      {
+        printf("pageUrl=%s\n", pval.av_val);
+        pval.av_val = NULL;
+      }
+      else if (AVMATCH(&pname, &av_audioCodecs))
+      {
+        printf("AudioCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
+      }
+      else if (AVMATCH(&pname, &av_videoCodecs))
+      {
+        printf("VideoCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
+      }
+      else if (AVMATCH(&pname, &av_objectEncoding))
+      {
+        printf("Encoding=%f\n", cobj.o_props[i].p_vu.p_number);
+      }
+    }
+    //如果还有更多参数
+    /* Still have more parameters? Copy them */
+    if (obj->o_num > 3)
+    {
+      int i = obj->o_num - 3;
+      printf("extras.o_num = %d\n", i);
+    }
+}
+
+int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize, int bDecodeName)
 {
     int nOriginalSize = nSize;
     int bError = false;
@@ -421,8 +559,8 @@ int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize)
         pBuffer++;
         continue;
       }
-
-      nRes = AMFProp_Decode(&prop, pBuffer, nSize);
+      //解析属性
+      nRes = AMFProp_Decode(&prop, pBuffer, nSize, bDecodeName);
       if (nRes == -1)
       {
         bError = true;
@@ -454,16 +592,58 @@ void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop)
   memcpy(&obj->o_props[obj->o_num++], prop, sizeof(AMFObjectProperty));
 }
 
-int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize)
+/**
+ * pBuffer 包体数据
+ * nSize 包体大小
+ * bDecodeName 是否有p_name需要解析，object类型需要
+ */
+int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize, int bDecodeName)
 {
   int nOriginalSize = nSize;
-  //int nRes;
+  int nRes;
 
   prop->p_name.av_len = 0;
   prop->p_name.av_val = NULL;
-  
-  nSize--;
 
+  if (nSize == 0 || !pBuffer)
+  {
+    printf("%s: Empty buffer/no buffer pointer!\n", __FUNCTION__);
+    return -1;
+  }
+  //如果是object类型
+  if (bDecodeName)
+  {
+    //key长度占用2个字节，key最少一个字节，data最少一个字节
+    if (nSize < 4) {/* at least name (length + at least 1 byte) and 1 byte of data */
+      printf("%s: Not enough data for decoding with name, less than 4 bytes!\n", __FUNCTION__);
+      return -1;
+    }
+    //解析key的长度
+    unsigned short nNameSize = AMF_DecodeInt16(pBuffer);
+    //总长度至少要有key的大小+2(key长度占用)
+    if ( nSize < nNameSize + 2)
+    {
+      printf("%s: Name size out of range: namesize (%d) > len (%d) - 2\n",
+               __FUNCTION__, nNameSize, nSize);
+      return -1;
+    }
+
+    //解析key
+    AMF_DecodeString(pBuffer, &prop->p_name);
+    //总长度减去key和key长度占用为value长度
+    nSize -= (2 + nNameSize);
+    //指针移到value
+    pBuffer += (2 + nNameSize);
+  }
+
+  if (nSize == 0)
+  {
+    return -1;
+  }
+
+  // 去掉value的类型占用
+  nSize--;
+  // 取类型
   prop->p_type = *pBuffer++;
   switch (prop->p_type)
   {
@@ -487,6 +667,103 @@ int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize)
       return -1;
     AMF_DecodeString(pBuffer, &prop->p_vu.p_aval);
     nSize -= (2 + nStringSize);
+    break;
+  }
+  case AMF_OBJECT:
+  {
+    nRes = AMF_Decode(&prop->p_vu.p_object, pBuffer, nSize, true);
+    if (nRes == -1)
+      return -1;
+    nSize -= nRes;
+    break;
+  }
+  case AMF_MOVIECLIP:
+  {
+    printf("AMF_MOVIECLIP reserved!\n");
+    return -1;
+    break;
+  }
+  case AMF_NULL:
+  case AMF_UNDEFINED:
+  case AMF_UNSUPPORTED:
+    prop->p_type = AMF_NULL;
+    break;
+  case AMF_REFERENCE:
+  {
+    printf("AMF_REFERENCE not supported!\n");
+    return -1;
+    break;
+  }
+  case AMF_ECMA_ARRAY:
+  {
+    nSize -= 4;
+
+    /* next comes the rest, mixed array has a final 0x000009 mark and names, so its an object */
+    nRes = AMF_Decode(&prop->p_vu.p_object, pBuffer + 4, nSize, true);
+    if (nRes == -1)
+      return -1;
+    nSize -= nRes;
+    break;
+  }
+  case AMF_OBJECT_END:
+  {
+    return -1;
+    break;
+  }
+  case AMF_STRICT_ARRAY:
+  {
+    unsigned int nArrayLen = AMF_DecodeInt32(pBuffer);
+    nSize -= 4;
+
+    nRes = AMF_DecodeArray(&prop->p_vu.p_object, pBuffer + 4, nSize,
+                           nArrayLen, false);
+    if (nRes == -1)
+      return -1;
+    nSize -= nRes;
+    break;
+  }
+  case AMF_DATE:
+  {
+    printf("AMF_DATE\n");
+
+    if (nSize < 10)
+      return -1;
+
+    prop->p_vu.p_number = AMF_DecodeNumber(pBuffer);
+    prop->p_UTCoffset = AMF_DecodeInt16(pBuffer + 8);
+
+    nSize -= 10;
+    break;
+  }
+  case AMF_LONG_STRING:
+  case AMF_XML_DOC:
+  {
+    unsigned int nStringSize = AMF_DecodeInt32(pBuffer);
+    if (nSize < (long)nStringSize + 4)
+      return -1;
+    AMF_DecodeLongString(pBuffer, &prop->p_vu.p_aval);
+    nSize -= (4 + nStringSize);
+    if (prop->p_type == AMF_LONG_STRING)
+      prop->p_type = AMF_STRING;
+    break;
+  }
+  case AMF_RECORDSET:
+  {
+    printf("AMF_RECORDSET reserved!\n");
+    return -1;
+    break;
+  }
+  case AMF_TYPED_OBJECT:
+  {
+    printf("AMF_TYPED_OBJECT not supported!\n");
+    return -1;
+    break;
+  }
+  case AMF_AVMPLUS:
+  {
+    //AMF3 要引入好几个函数，先不加
+    printf("AMF3 not supported!\n");
+    return -1;
     break;
   }
   default:
