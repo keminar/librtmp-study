@@ -127,6 +127,7 @@ int publish_using_packet()
         RTMP_Free(rtmp);
         return -1;
     }
+    printf("tcUrl=%.*s, app=%.*s, playpath0=%.*s\n", rtmp->Link.tcUrl.av_len, rtmp->Link.tcUrl.av_val, rtmp->Link.app.av_len, rtmp->Link.app.av_val, rtmp->Link.playpath0.av_len, rtmp->Link.playpath0.av_val);
     //设置为发布流，默认AMF命令为播放流
     RTMP_EnableWrite(rtmp);
     //建立RTMP连接，创建一个RTMP协议规范中的NetConnection
@@ -343,7 +344,7 @@ int publish_using_write()
         RTMP_Free(rtmp);
         return -1;
     }
-
+    printf("tcUrl=%.*s, app=%.*s, playpath0=%.*s\n", rtmp->Link.tcUrl.av_len, rtmp->Link.tcUrl.av_val, rtmp->Link.app.av_len, rtmp->Link.app.av_val, rtmp->Link.playpath0.av_len, rtmp->Link.playpath0.av_val);
     RTMP_EnableWrite(rtmp);
     //1hour
     RTMP_SetBufferMS(rtmp, 3600 * 1000);

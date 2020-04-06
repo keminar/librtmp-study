@@ -488,27 +488,27 @@ void ServeInvoke(AMFObject *obj)
         pval = cobj.o_props[i].p_vu.p_aval;
       if (AVMATCH(&pname, &av_app))
       {
-        printf("app=%s\n", pval.av_val);
+        printf("app=%.*s\n", pval.av_len, pval.av_val);
         pval.av_val = NULL;
       }
       else if (AVMATCH(&pname, &av_flashVer))
       {
-        printf("flashVer=%s\n", pval.av_val);
+        printf("flashVer=%.*s\n", pval.av_len, pval.av_val);
         pval.av_val = NULL;
       }
       else if (AVMATCH(&pname, &av_swfUrl))
       {
-        printf("swfUrl=%s\n", pval.av_val);
+        printf("swfUrl=%.*s\n", pval.av_len, pval.av_val);
         pval.av_val = NULL;
       }
       else if (AVMATCH(&pname, &av_tcUrl))
       {
-        printf("tcUrl=%s\n", pval.av_val);
+        printf("tcUrl=%.*s\n", pval.av_len, pval.av_val);
         pval.av_val = NULL;
       }
       else if (AVMATCH(&pname, &av_pageUrl))
       {
-        printf("pageUrl=%s\n", pval.av_val);
+        printf("pageUrl=%.*s\n", pval.av_len, pval.av_val);
         pval.av_val = NULL;
       }
       else if (AVMATCH(&pname, &av_audioCodecs))
