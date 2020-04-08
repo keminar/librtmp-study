@@ -1671,7 +1671,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
   packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;// 消息类型ID为20，表示为Invoke方法调用
   packet.m_nTimeStamp = 0;// Chunk Msg Header中的时间戳
   packet.m_nInfoField2 = 0;// Chunk Msg Header中的消息流id Msg StreamID
-  packet.m_hasAbsTimestamp = 0;// 相对时间
+  packet.m_hasAbsTimestamp = 0;// m_nTimeStamp是否为相对时间
   packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;//跳过包头，指到包体位置
 
   /**

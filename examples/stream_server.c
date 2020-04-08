@@ -35,6 +35,11 @@ typedef struct AVal
 //定义字符串结构体
 #define SAVC(x) static const AVal av_##x = AVC(#x)
 
+//字符串常量转为字符串结构
+#define STR2AVAL(av, str) \
+  av.av_val = str;  \
+  av.av_len = strlen(av.av_val)
+
 typedef enum
 { AMF_NUMBER = 0, AMF_BOOLEAN, AMF_STRING, AMF_OBJECT,
   AMF_MOVIECLIP,		/* reserved, not used */
@@ -105,6 +110,9 @@ void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop);
 
 //解析命令参数
 void ServeInvoke(AMFObject *obj);
+
+// 对connect进行回应
+static int SendConnectResult(double txn);
 
 // 从rtmpdump精简的时间函数，不用跨平台
 uint32_t
@@ -447,13 +455,57 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     ptr = packet->m_body + 1;
     // 解析method名字
     AMF_DecodeString(ptr, &method);
-    printf("read body method type=%d, Invoking=%s\n", packet->m_body[0] , method.av_val);
+    printf("read body method type=%d, Invoking=%.*s\n", packet->m_body[0] , method.av_len, method.av_val);
 
     AMFObject obj;
     //反解到object
     AMF_Decode(&obj, packet->m_body, packet->m_nBodySize, false);
     //解决命令参数
     ServeInvoke(&obj);
+    double txn = obj.o_props[1].p_vu.p_number;
+    SendConnectResult(txn);
+    return 0;
+}
+
+static int
+SendConnectResult(double txn)
+{
+    RTMPPacket packet;
+    //定义一个数组，并且定义一个指针指到数组尾
+    char pbuf[384], *pend = pbuf + sizeof(pbuf);
+    //定义一个字符串结构
+    AVal av;
+
+    printf("txn=%f\n", txn);
+
+    packet.m_nChannel = 0x03;//通过设置ChannelID来设置Basic stream id的长度和值
+    packet.m_headerType = 1; // Basic header的head type为1，表明msg header长度为7字节
+    packet.m_packetType = 0x14;//消息类型ID为20，表示为Invoke方法调用
+    packet.m_nTimeStamp = 0;// Chunk Msg Header中的时间戳
+    packet.m_nInfoField2 = 0;// Chunk Msg Header中的消息流id Msg StreamID
+    packet.m_hasAbsTimestamp = 0;// m_nTimeStamp是否为相对时间
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+    SAVC(_result);
+    SAVC(fmsVer);
+    SAVC(capabilities);
+    SAVC(mode);
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av__result);
+    enc = AMF_EncodeNumber(enc, pend, txn);
+    // 定义AMF对象开始
+    *enc++ = 3;
+
+    STR2AVAL(av, "FMS/3,5,1,525");
+    enc = AMF_EncodeNamedString(enc, pend, &av_fmsVer, &av);
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_capabilities, 31.0);
+    enc = AMF_EncodeNamedNumber(enc, pend, &av_mode, 1.0);
+    // 标记AMF对象结束
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = 9;
+
+    //RTMP_SendPacket(&packet);
     return 0;
 }
 
