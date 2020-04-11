@@ -794,6 +794,7 @@ SendConnectResult(int clnt_sock, double txn)
     *enc++ = 9;
     
     packet.m_nBodySize = enc - packet.m_body;
+    // 发送完回应以后，客户端会一次性发送3个命令包 releaseStream, FCPublish, createStream
     RTMP_SendPacket(clnt_sock, &packet);
 
     return 0;
