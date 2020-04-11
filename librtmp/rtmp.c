@@ -1632,7 +1632,7 @@ SendConnectPacket(RTMP *r, RTMPPacket *cp)
    * 04 音频，视频通道
    * 05 06 07 服务器保留
    * 
-   * Chunk Msg Header 也为可变长度，取值分别为11个字节，7字节，3字节，分为4个部分
+   * Chunk Msg Header 也为可变长度，取值分别为11个字节，7字节，3字节，0字节分为4个部分
    * timestamp 3个字节，时间戳，body Size 3个字节 ，表示数据大小，packet Type 1字节表示数据类型，StreamID 4字节
    * +-----------------+----------------+--------------------+-------------------------+
    * |timestamp(3字节) |body size(3字节) | packet type(1字节) | msg streamID (4字节)    |

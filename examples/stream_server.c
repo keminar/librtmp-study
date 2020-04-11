@@ -112,7 +112,7 @@ void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop);
 void ServeInvoke(AMFObject *obj);
 
 // 对connect进行回应
-static int SendConnectResult(double txn);
+static int SendConnectResult(int clnt_sock, double txn);
 
 // 从rtmpdump精简的时间函数，不用跨平台
 uint32_t
@@ -265,6 +265,198 @@ int AMF_DecodeArray(AMFObject *obj, const char *pBuffer, int nSize,
 
   return nOriginalSize - nSize;
 }
+
+// 把nVal转大端字节序并存入output
+char *
+AMF_EncodeInt16(char *output, char *outend, short nVal)
+{
+  if (output + 2 > outend)
+    return NULL;
+
+  output[1] = nVal & 0xff;
+  output[0] = nVal >> 8;
+  return output + 2;
+}
+
+char *
+AMF_EncodeInt24(char *output, char *outend, int nVal)
+{
+  if (output + 3 > outend)
+    return NULL;
+
+  output[2] = nVal & 0xff;
+  output[1] = nVal >> 8;
+  output[0] = nVal >> 16;
+  return output + 3;
+}
+
+char *
+AMF_EncodeInt32(char *output, char *outend, int nVal)
+{
+  if (output + 4 > outend)
+    return NULL;
+
+  output[3] = nVal & 0xff;
+  output[2] = nVal >> 8;
+  output[1] = nVal >> 16;
+  output[0] = nVal >> 24;
+  return output + 4;
+}
+
+char *
+AMF_EncodeString(char *output, char *outend, const AVal *bv)
+{
+  // 检查加上字符串会不会超过总长度,1为type长度，2为datasize长度
+  if ((bv->av_len < 65536 && output + 1 + 2 + bv->av_len > outend) ||
+      output + 1 + 4 + bv->av_len > outend)
+    return NULL;
+
+  if (bv->av_len < 65536)
+  {
+    // 写上字符串类型（AMFType）
+    *output++ = AMF_STRING;
+    // 将内容长度av_len大端转换并写入output
+    output = AMF_EncodeInt16(output, outend, bv->av_len);
+  }
+  else
+  {
+    //宽字符串类型
+    *output++ = AMF_LONG_STRING;
+
+    output = AMF_EncodeInt32(output, outend, bv->av_len);
+  }
+  // 写上bv的内容
+  memcpy(output, bv->av_val, bv->av_len);
+  // 指针位置移到尾部
+  output += bv->av_len;
+
+  return output;
+}
+
+char *
+AMF_EncodeNumber(char *output, char *outend, double dVal)
+{
+  //检查溢出，1为type长度，8为objvalue长度
+  if (output + 1 + 8 > outend)
+    return NULL;
+
+  // 写上类型
+  *output++ = AMF_NUMBER; /* type: Number */
+
+#if __FLOAT_WORD_ORDER == __BYTE_ORDER
+#if __BYTE_ORDER == __BIG_ENDIAN
+  memcpy(output, &dVal, 8);
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
+  {
+    unsigned char *ci, *co;
+    ci = (unsigned char *)&dVal;
+    co = (unsigned char *)output;
+    co[0] = ci[7];
+    co[1] = ci[6];
+    co[2] = ci[5];
+    co[3] = ci[4];
+    co[4] = ci[3];
+    co[5] = ci[2];
+    co[6] = ci[1];
+    co[7] = ci[0];
+  }
+#endif
+#else
+#if __BYTE_ORDER == __LITTLE_ENDIAN /* __FLOAT_WORD_ORER == __BIG_ENDIAN */
+  {
+    unsigned char *ci, *co;
+    ci = (unsigned char *)&dVal;
+    co = (unsigned char *)output;
+    co[0] = ci[3];
+    co[1] = ci[2];
+    co[2] = ci[1];
+    co[3] = ci[0];
+    co[4] = ci[7];
+    co[5] = ci[6];
+    co[6] = ci[5];
+    co[7] = ci[4];
+  }
+#else                               /* __BYTE_ORDER == __BIG_ENDIAN && __FLOAT_WORD_ORER == __LITTLE_ENDIAN */
+  {
+    unsigned char *ci, *co;
+    ci = (unsigned char *)&dVal;
+    co = (unsigned char *)output;
+    co[0] = ci[4];
+    co[1] = ci[5];
+    co[2] = ci[6];
+    co[3] = ci[7];
+    co[4] = ci[0];
+    co[5] = ci[1];
+    co[6] = ci[2];
+    co[7] = ci[3];
+  }
+#endif
+#endif
+
+  return output + 8;
+}
+
+char *
+AMF_EncodeBoolean(char *output, char *outend, int bVal)
+{
+  //检查溢出，1为type长度，1为objvalue长度
+  if (output + 2 > outend)
+    return NULL;
+
+  *output++ = AMF_BOOLEAN;
+
+  *output++ = bVal ? 0x01 : 0x00;
+
+  return output;
+}
+
+// MAP类型，值string
+char *
+AMF_EncodeNamedString(char *output, char *outend, const AVal *strName, const AVal *strValue)
+{
+  // 2为strName的长度的占用
+  if (output + 2 + strName->av_len > outend)
+    return NULL;
+  // strName就是AMF数据的ObjType
+  // 存入strName的长度  
+  output = AMF_EncodeInt16(output, outend, strName->av_len);
+  // 存入strName的值
+  memcpy(output, strName->av_val, strName->av_len);
+  output += strName->av_len;
+
+  // strValue是AMF数据的ObjValue
+  // 存入strValue
+  return AMF_EncodeString(output, outend, strValue);
+}
+
+// MAP类型，值Number
+char *
+AMF_EncodeNamedNumber(char *output, char *outend, const AVal *strName, double dVal)
+{
+  if (output + 2 + strName->av_len > outend)
+    return NULL;
+  output = AMF_EncodeInt16(output, outend, strName->av_len);
+
+  memcpy(output, strName->av_val, strName->av_len);
+  output += strName->av_len;
+
+  return AMF_EncodeNumber(output, outend, dVal);
+}
+
+// MAP类型，值Bool
+char *
+AMF_EncodeNamedBoolean(char *output, char *outend, const AVal *strName, int bVal)
+{
+  if (output + 2 + strName->av_len > outend)
+    return NULL;
+  output = AMF_EncodeInt16(output, outend, strName->av_len);
+
+  memcpy(output, strName->av_val, strName->av_len);
+  output += strName->av_len;
+
+  return AMF_EncodeBoolean(output, outend, bVal);
+}
+
 
 int RTMPPacket_Alloc(RTMPPacket *p, uint32_t nSize)
 {
@@ -463,12 +655,104 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     //解决命令参数
     ServeInvoke(&obj);
     double txn = obj.o_props[1].p_vu.p_number;
-    SendConnectResult(txn);
+    SendConnectResult(clnt_sock, txn);
     return 0;
 }
 
+int RTMP_SendPacket(int clnt_sock, RTMPPacket *packet)
+{
+  int nSize;
+  int hSize;
+  char *header, *hptr, *hend, c;
+  char *buffer;
+  int nChunkSize;
+ 
+  // 块头初始大小 = 基本头(1字节) + 块消息头大小(11/7/3/0) = [12, 8, 4, 1]
+  /**
+   * hSize表示块头大小
+   * +-----------+-----------------+----------------+--------------------+
+   * | head type |timestamp(3字节) |body size(3字节) | packet type(1字节) |
+   * +-----------+-----------------+----------------+--------------------+ 
+   */
+  hSize = 8;
+
+  // m_body是指向负载数据首地址的指针；“-”号用于指针前移
+  // 块头的首指针(含头信息)
+  header = packet->m_body - hSize;
+  // 块头的尾指针, 为了后面计算会不会溢出的
+  hend = packet->m_body;
+     
+  // hptr指到Basic Header头部
+  hptr = header;
+  // 把ChunkBasicHeader的Fmt类型左移6位
+  c = packet->m_headerType << 6;
+  // 把ChunkBasicHeader的低6位设置成ChunkStreamID( cs id )
+  c |= packet->m_nChannel;
+     
+  // 将c的值设到basic header第一个字节
+  // 可以拆分成两句*hptr=c; hptr++，此时hptr指向第2个字节
+  *hptr++ = c;
+ // 将时间戳(相对或绝对)转化为3个字节存入hptr，如果时间戳超过0xffffff,则后面还要填入Extend Timestamp
+  hptr = AMF_EncodeInt24(hptr, hend, packet->m_nTimeStamp);
+
+  // ChunkMsgHeader长度为11、7，都含有 msg length + msg type id
+  // 将消息长度(msg length)转化为3个字节存入hptr
+  hptr = AMF_EncodeInt24(hptr, hend, packet->m_nBodySize);
+  *hptr++ = packet->m_packetType; 
+
+  // 到此为止，已经将块头填写好了
+  // 此时nSize表示负载数据的长度
+  nSize = packet->m_nBodySize;
+  // buffer是指向负载数据区的指针
+  buffer = packet->m_body;
+  //Chunk大小，默认是128字节
+  nChunkSize = 128;
+  
+  // 消息的负载 + 头
+  while (nSize + hSize)
+  {
+    int wrote;
+    // 消息负载大小 < Chunk默认大小(128字节）（不用分块）
+    if (nSize < nChunkSize)
+      nChunkSize = nSize;// Chunk可能小于设定值
+
+    // 直接将负载数据和块头数据发送出去
+    wrote = write(clnt_sock, header, nChunkSize + hSize);
+    if (!wrote)
+      return false;
+
+    // 消息负载长度 - Chunk负载长度
+    nSize -= nChunkSize;
+    // buffer指针前移1个Chunk负载长度
+    buffer += nChunkSize;
+    // 重置块头大小为0，后续的块只需要有基本头(或加上扩展时间戳)即可
+    hSize = 0;
+
+    // 如果消息负载数据还没有发完，准备填充下一个块的块头数据
+    if (nSize > 0)
+    {
+      // 空出包头的位置
+      header = buffer - 1;
+
+      /**
+       * hSize表示块头大小
+       * +--------------------+
+       * | head type(1字节) |
+       * +--------------------+ 
+       */
+      // 包头大小为1
+      hSize = 1;
+      
+      //写入head_type
+      *header = (0xc0 | c);
+    }
+  }
+  
+  return true;
+}
+
 static int
-SendConnectResult(double txn)
+SendConnectResult(int clnt_sock, double txn)
 {
     RTMPPacket packet;
     //定义一个数组，并且定义一个指针指到数组尾
@@ -505,7 +789,9 @@ SendConnectResult(double txn)
     *enc++ = 0;
     *enc++ = 9;
 
-    //RTMP_SendPacket(&packet);
+    packet.m_nBodySize = enc - packet.m_body;
+    RTMP_SendPacket(clnt_sock, &packet);
+
     return 0;
 }
 
