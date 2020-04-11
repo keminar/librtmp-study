@@ -635,6 +635,9 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
 
     printf("packetType=0x%x, chunk len=%d\n", packet->m_packetType, nChunk);
 
+    // 这里长度没超过128，为了示例一次读取，如果长度大于128，需要多次读取并去掉每片前的head_type的1个字节
+    // m_nBodySize的长度是body的长度再加上每个分片的header的长度。官方是在循环调用RTMP_ReadPacket函数
+    // 默认分包长度是128 ，后面音视频流发送前可能会被改成其它值
     nBytes = recv(clnt_sock, packet->m_body, nChunk, 0);
     if (nBytes != nChunk)
     {
@@ -733,7 +736,7 @@ int RTMP_SendPacket(int clnt_sock, RTMPPacket *packet)
     {
       // 空出包头的位置
       header = buffer - 1;
-
+      // 因为分包也加了头，所以实际发出去的比packet->m_nBodySize要大。
       /**
        * hSize表示块头大小
        * +--------------------+
@@ -771,15 +774,16 @@ SendConnectResult(int clnt_sock, double txn)
     packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
     SAVC(_result);
-    SAVC(fmsVer);
-    SAVC(capabilities);
-    SAVC(mode);
+    
     char *enc = packet.m_body;
     enc = AMF_EncodeString(enc, pend, &av__result);
     enc = AMF_EncodeNumber(enc, pend, txn);
-    // 定义AMF对象开始
-    *enc++ = 3;
 
+    // 定义AMF对象开始 , 以下的对象不是必须的
+    *enc++ = 3;
+    SAVC(fmsVer);
+    SAVC(capabilities);
+    SAVC(mode);
     STR2AVAL(av, "FMS/3,5,1,525");
     enc = AMF_EncodeNamedString(enc, pend, &av_fmsVer, &av);
     enc = AMF_EncodeNamedNumber(enc, pend, &av_capabilities, 31.0);
@@ -788,7 +792,7 @@ SendConnectResult(int clnt_sock, double txn)
     *enc++ = 0;
     *enc++ = 0;
     *enc++ = 9;
-
+    
     packet.m_nBodySize = enc - packet.m_body;
     RTMP_SendPacket(clnt_sock, &packet);
 
