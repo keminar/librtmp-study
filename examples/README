@@ -46,3 +46,7 @@ ldconfig -v
 测试中用的rtmp server
 --
 https://github.com/gwuhaolin/livego
+
+ffmpeg 推流
+--
+ ffmpeg.exe -re -i test.flv  -f flv 'rtmp://127.0.0.1/live/stream?aa=bb'
