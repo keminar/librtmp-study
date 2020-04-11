@@ -109,7 +109,7 @@ int AMFProp_Decode(AMFObjectProperty *prop, const char *pBuffer, int nSize, int 
 void AMF_AddProp(AMFObject *obj, const AMFObjectProperty *prop);
 
 //解析命令参数
-void ServeInvoke(AMFObject *obj);
+void ServeInvoke(AMFObject *obj, int clnt_sock);
 
 // 对connect进行回应
 static int SendConnectResult(int clnt_sock, double txn);
@@ -581,86 +581,6 @@ void handshake_server(int clnt_sock)
     printf("hanshake success\n");
 }
 
-// 读取包数据
-int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
-{
-    // 头数组
-    uint8_t hbuf[RTMP_MAX_HEADER_SIZE] = {0};
-    // 头指针
-    char *header = (char *)hbuf;
-    // 头长度
-    int nSize, hSize;
-    int nBytes;
-    int nChunk;
-    AVal method;
-    char *ptr;
-
-    nBytes = recv(clnt_sock, header, 1, 0);
-    if (nBytes == -1)
-    {
-        error_handling("recv returned");
-    }
-
-    packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
-    packet->m_nChannel = (hbuf[0] & 0x3f);
-    printf("header type=%d, basic stream id=%d\n", (int)packet->m_headerType, packet->m_nChannel);
-    header++;
-
-    // msg header + basic header 为总的header长度
-    hSize = 12;
-    // 不算header type
-    nSize = hSize - 1;
-    recv(clnt_sock, header, nSize, 0);
-
-    //则取时间戳
-    packet->m_nTimeStamp = AMF_DecodeInt24(header);
-
-    //取body size
-    packet->m_nBodySize = AMF_DecodeInt24(header + 3);
-
-    // 取packet type
-    packet->m_packetType = header[6];
-
-    // 取msg streamID
-    packet->m_nInfoField2 = DecodeInt32LE(header + 7); 
-
-    packet->m_body = NULL;
-    if (!RTMPPacket_Alloc(packet, packet->m_nBodySize))
-    {
-        error_handling(" failed to allocate packet");
-    }
-
-    // 如果一个packet第一次读取，要通过m_nBytesRead来移动指针
-    nChunk = packet->m_nBodySize;
-
-    printf("packetType=0x%x, chunk len=%d\n", packet->m_packetType, nChunk);
-
-    // 这里长度没超过128，为了示例一次读取，如果长度大于128，需要多次读取并去掉每片前的head_type的1个字节
-    // m_nBodySize的长度是body的长度再加上每个分片的header的长度。官方是在循环调用RTMP_ReadPacket函数
-    // 默认分包长度是128 ，后面音视频流发送前可能会被改成其它值
-    nBytes = recv(clnt_sock, packet->m_body, nChunk, 0);
-    if (nBytes != nChunk)
-    {
-        printf("recv bytes=%d\n", nBytes);
-        error_handling("failed to read body");
-    }
-    packet->m_nBytesRead = nChunk;
-    
-    // 包体指针向前移一步，跳过method类型字段
-    ptr = packet->m_body + 1;
-    // 解析method名字
-    AMF_DecodeString(ptr, &method);
-    printf("read body method type=%d, Invoking=%.*s\n", packet->m_body[0] , method.av_len, method.av_val);
-
-    AMFObject obj;
-    //反解到object
-    AMF_Decode(&obj, packet->m_body, packet->m_nBodySize, false);
-    //解决命令参数
-    ServeInvoke(&obj);
-    double txn = obj.o_props[1].p_vu.p_number;
-    SendConnectResult(clnt_sock, txn);
-    return 0;
-}
 
 int RTMP_SendPacket(int clnt_sock, RTMPPacket *packet)
 {
@@ -800,80 +720,202 @@ SendConnectResult(int clnt_sock, double txn)
     return 0;
 }
 
-void ServeInvoke(AMFObject *obj)
+
+// 读取包数据
+int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
+{
+    // 头数组
+    uint8_t hbuf[RTMP_MAX_HEADER_SIZE] = {0};
+    // 头指针
+    char *header = (char *)hbuf;
+    // 头长度
+    int nSize, hSize;
+    int nBytes;
+    int nChunk;
+    AVal method;
+    char *ptr;
+
+    nBytes = recv(clnt_sock, header, 1, 0);
+    if (nBytes == -1)
+    {
+        error_handling("recv returned");
+    }
+
+    packet->m_headerType = (hbuf[0] & 0xc0) >> 6;
+    packet->m_nChannel = (hbuf[0] & 0x3f);
+    printf("header type=%d, basic stream id=%d\n", (int)packet->m_headerType, packet->m_nChannel);
+    header++;
+
+    // msg header + basic header 为总的header长度
+    if (packet->m_headerType == 0) {
+      hSize = 12;
+    } else if (packet->m_headerType == 1) {
+      hSize = 8;
+    } else {
+      printf("head type =%d\n", packet->m_headerType);
+      exit(1);
+    }
+    // 不算header type
+    nSize = hSize - 1;
+    recv(clnt_sock, header, nSize, 0);
+
+    //则取时间戳
+    packet->m_nTimeStamp = AMF_DecodeInt24(header);
+
+    //取body size
+    packet->m_nBodySize = AMF_DecodeInt24(header + 3);
+
+    // 取packet type
+    packet->m_packetType = header[6];
+
+    // 取msg streamID
+    packet->m_nInfoField2 = DecodeInt32LE(header + 7); 
+
+    packet->m_body = NULL;
+    if (!RTMPPacket_Alloc(packet, packet->m_nBodySize))
+    {
+        error_handling(" failed to allocate packet");
+    }
+
+    // 如果一个packet第一次读取，要通过m_nBytesRead来移动指针
+    nChunk = packet->m_nBodySize;
+
+    printf("packetType=0x%x, chunk len=%d\n", packet->m_packetType, nChunk);
+
+    // 这里长度没超过128，为了示例一次读取，如果长度大于128，需要多次读取并去掉每片前的head_type的1个字节
+    // m_nBodySize的长度是body的长度再加上每个分片的header的长度。官方是在循环调用RTMP_ReadPacket函数
+    // 默认分包长度是128 ，后面音视频流发送前可能会被改成其它值
+    nBytes = recv(clnt_sock, packet->m_body, nChunk, 0);
+    if (nBytes != nChunk)
+    {
+        printf("recv bytes=%d\n", nBytes);
+        error_handling("failed to read body");
+    }
+    packet->m_nBytesRead = nChunk;
+    
+    // 包体指针向前移一步，跳过method类型字段
+    ptr = packet->m_body + 1;
+    // 解析method名字
+    AMF_DecodeString(ptr, &method);
+    printf("read body method type=%d, Invoking=%.*s\n", packet->m_body[0] , method.av_len, method.av_val);
+
+    return 0;
+}
+
+static int
+SendResultNumber(int clnt_sock, double txn, double ID)
+{
+  RTMPPacket packet;
+  char pbuf[256], *pend = pbuf + sizeof(pbuf);
+
+  packet.m_nChannel = 0x03; // control channel (invoke)
+  packet.m_headerType = 1;  /* RTMP_PACKET_SIZE_MEDIUM; */
+  packet.m_packetType = 0x14;
+  packet.m_nTimeStamp = 0;
+  packet.m_nInfoField2 = 0;
+  packet.m_hasAbsTimestamp = 0;
+  packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+  SAVC(_result);
+  char *enc = packet.m_body;
+  enc = AMF_EncodeString(enc, pend, &av__result);
+  enc = AMF_EncodeNumber(enc, pend, txn);
+  *enc++ = AMF_NULL;
+  enc = AMF_EncodeNumber(enc, pend, ID);
+
+  packet.m_nBodySize = enc - packet.m_body;
+
+  return RTMP_SendPacket(clnt_sock, &packet);
+}
+
+void ServeInvoke(AMFObject *obj, int clnt_sock)
 {
     AMFObject cobj;
     AVal pname, pval;
     int i;
 
-    // 定义av_app等变量
-    SAVC(app);
-    SAVC(flashVer);
-    SAVC(swfUrl);
-    SAVC(pageUrl);
-    SAVC(tcUrl);
-    SAVC(audioCodecs);
-    SAVC(videoCodecs);
-    SAVC(objectEncoding);
+    AVal method;
+    method = obj->o_props[0].p_vu.p_aval;
 
-    // 取得第3个参数
-    if ((&obj->o_props[2])->p_type == AMF_OBJECT)
-      cobj = (&obj->o_props[2])->p_vu.p_object;
-    else
-      cobj = AMFObj_Invalid;
+    SAVC(connect);
+    SAVC(createStream);
+    if (AVMATCH(&method, &av_connect)) {
+      // 定义av_app等变量
+      SAVC(app);
+      SAVC(flashVer);
+      SAVC(swfUrl);
+      SAVC(pageUrl);
+      SAVC(tcUrl);
+      SAVC(audioCodecs);
+      SAVC(videoCodecs);
+      SAVC(objectEncoding);
 
-    for (i = 0; i < cobj.o_num; i++)
-    {
-      pname = cobj.o_props[i].p_name;
-      pval.av_val = NULL;
-      pval.av_len = 0;
-      if (cobj.o_props[i].p_type == AMF_STRING)
-        pval = cobj.o_props[i].p_vu.p_aval;
-      if (AVMATCH(&pname, &av_app))
+      // 取得第3个参数
+      if ((&obj->o_props[2])->p_type == AMF_OBJECT)
+        cobj = (&obj->o_props[2])->p_vu.p_object;
+      else
+        cobj = AMFObj_Invalid;
+
+      for (i = 0; i < cobj.o_num; i++)
       {
-        printf("app=%.*s\n", pval.av_len, pval.av_val);
+        pname = cobj.o_props[i].p_name;
         pval.av_val = NULL;
+        pval.av_len = 0;
+        if (cobj.o_props[i].p_type == AMF_STRING)
+          pval = cobj.o_props[i].p_vu.p_aval;
+        if (AVMATCH(&pname, &av_app))
+        {
+          printf("app=%.*s\n", pval.av_len, pval.av_val);
+          pval.av_val = NULL;
+        }
+        else if (AVMATCH(&pname, &av_flashVer))
+        {
+          printf("flashVer=%.*s\n", pval.av_len, pval.av_val);
+          pval.av_val = NULL;
+        }
+        else if (AVMATCH(&pname, &av_swfUrl))
+        {
+          printf("swfUrl=%.*s\n", pval.av_len, pval.av_val);
+          pval.av_val = NULL;
+        }
+        else if (AVMATCH(&pname, &av_tcUrl))
+        {
+          printf("tcUrl=%.*s\n", pval.av_len, pval.av_val);
+          pval.av_val = NULL;
+        }
+        else if (AVMATCH(&pname, &av_pageUrl))
+        {
+          printf("pageUrl=%.*s\n", pval.av_len, pval.av_val);
+          pval.av_val = NULL;
+        }
+        else if (AVMATCH(&pname, &av_audioCodecs))
+        {
+          printf("AudioCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
+        }
+        else if (AVMATCH(&pname, &av_videoCodecs))
+        {
+          printf("VideoCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
+        }
+        else if (AVMATCH(&pname, &av_objectEncoding))
+        {
+          printf("Encoding=%f\n", cobj.o_props[i].p_vu.p_number);
+        }
       }
-      else if (AVMATCH(&pname, &av_flashVer))
+      //如果还有更多参数
+      /* Still have more parameters? Copy them */
+      if (obj->o_num > 3)
       {
-        printf("flashVer=%.*s\n", pval.av_len, pval.av_val);
-        pval.av_val = NULL;
+        int i = obj->o_num - 3;
+        printf("extras.o_num = %d\n", i);
       }
-      else if (AVMATCH(&pname, &av_swfUrl))
-      {
-        printf("swfUrl=%.*s\n", pval.av_len, pval.av_val);
-        pval.av_val = NULL;
-      }
-      else if (AVMATCH(&pname, &av_tcUrl))
-      {
-        printf("tcUrl=%.*s\n", pval.av_len, pval.av_val);
-        pval.av_val = NULL;
-      }
-      else if (AVMATCH(&pname, &av_pageUrl))
-      {
-        printf("pageUrl=%.*s\n", pval.av_len, pval.av_val);
-        pval.av_val = NULL;
-      }
-      else if (AVMATCH(&pname, &av_audioCodecs))
-      {
-        printf("AudioCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
-      }
-      else if (AVMATCH(&pname, &av_videoCodecs))
-      {
-        printf("VideoCodecs=%f\n", cobj.o_props[i].p_vu.p_number);
-      }
-      else if (AVMATCH(&pname, &av_objectEncoding))
-      {
-        printf("Encoding=%f\n", cobj.o_props[i].p_vu.p_number);
-      }
+      
+      double txn = obj->o_props[1].p_vu.p_number;
+      SendConnectResult(clnt_sock, txn);
+    } else if (AVMATCH(&method, &av_createStream)) {
+      double txn = obj->o_props[1].p_vu.p_number;
+      SendResultNumber(clnt_sock, txn, 1);
     }
-    //如果还有更多参数
-    /* Still have more parameters? Copy them */
-    if (obj->o_num > 3)
-    {
-      int i = obj->o_num - 3;
-      printf("extras.o_num = %d\n", i);
-    }
+
 }
 
 int AMF_Decode(AMFObject *obj, const char *pBuffer, int nSize, int bDecodeName)
@@ -1155,14 +1197,25 @@ int main(int argc, char *argv[])
     }
     handshake_server(clnt_sock);
     
-    RTMP_ReadPacket(clnt_sock, &packet);
+    int i;
+    // 读取connect, releaseStream, FCPublish, createStream
+    for (i = 0; i<4; i++) {
 
-    //销毁内存, 下一个循环要读取新数据包了
-    if (packet.m_body)
-    {
-        //申请内存时有多申请RTMP_MAX_HEADER_SIZE，指针要前移
-        free(packet.m_body - RTMP_MAX_HEADER_SIZE);
-        packet.m_body = NULL;
+      RTMP_ReadPacket(clnt_sock, &packet);
+
+      AMFObject obj;
+      //反解到object
+      AMF_Decode(&obj, packet.m_body, packet.m_nBodySize, false);
+      //解决命令参数
+      ServeInvoke(&obj, clnt_sock);
+
+      //销毁内存, 下一个循环要读取新数据包了
+      if (packet.m_body)
+      {
+          //申请内存时有多申请RTMP_MAX_HEADER_SIZE，指针要前移
+          free(packet.m_body - RTMP_MAX_HEADER_SIZE);
+          packet.m_body = NULL;
+      }
     }
     close(clnt_sock);
     close(serv_sock);
