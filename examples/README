@@ -50,3 +50,7 @@ https://github.com/gwuhaolin/livego
 ffmpeg 推流
 --
  ffmpeg.exe -re -i test.flv  -f flv 'rtmp://127.0.0.1/live/stream?aa=bb'
+
+ wireshark抓包
+ --
+ 使用超管启动，本地开发时是捕获lookback网卡（也就是127.0.0.1那个）过滤条件写rtmpt
