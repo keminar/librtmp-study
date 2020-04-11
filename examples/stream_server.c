@@ -21,6 +21,9 @@
 // basic header + msg header最大长度
 #define RTMP_MAX_HEADER_SIZE 18
 
+// 包头长度
+static const int packetSize[] = {12, 8, 4, 1};
+
 // 字符串结构体
 typedef struct AVal
   {
@@ -301,6 +304,20 @@ AMF_EncodeInt32(char *output, char *outend, int nVal)
   output[1] = nVal >> 16;
   output[0] = nVal >> 24;
   return output + 4;
+}
+
+
+static int
+EncodeInt32LE(char *output, int nVal)
+{
+  output[0] = nVal;
+  nVal >>= 8;
+  output[1] = nVal;
+  nVal >>= 8;
+  output[2] = nVal;
+  nVal >>= 8;
+  output[3] = nVal;
+  return 4;
 }
 
 char *
@@ -589,15 +606,16 @@ int RTMP_SendPacket(int clnt_sock, RTMPPacket *packet)
   char *header, *hptr, *hend, c;
   char *buffer;
   int nChunkSize;
- 
+
   // 块头初始大小 = 基本头(1字节) + 块消息头大小(11/7/3/0) = [12, 8, 4, 1]
   /**
-   * hSize表示块头大小
+   * hSize表示块头大小, 如当hSize=8时
    * +-----------+-----------------+----------------+--------------------+
    * | head type |timestamp(3字节) |body size(3字节) | packet type(1字节) |
    * +-----------+-----------------+----------------+--------------------+ 
    */
-  hSize = 8;
+  hSize = packetSize[packet->m_headerType];
+  // 因为只是演示命令操作部分，变长header的逻辑和扩展时间戳的逻辑省略掉了
 
   // m_body是指向负载数据首地址的指针；“-”号用于指针前移
   // 块头的首指针(含头信息)
@@ -622,6 +640,10 @@ int RTMP_SendPacket(int clnt_sock, RTMPPacket *packet)
   // 将消息长度(msg length)转化为3个字节存入hptr
   hptr = AMF_EncodeInt24(hptr, hend, packet->m_nBodySize);
   *hptr++ = packet->m_packetType; 
+
+  // ChunkMsgHeader长度为11, 含有msg stream id（ 小端）
+  if (hSize > 8)
+    hptr += EncodeInt32LE(hptr, packet->m_nInfoField2);
 
   // 到此为止，已经将块头填写好了
   // 此时nSize表示负载数据的长度
@@ -731,9 +753,7 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     // 头长度
     int nSize, hSize;
     int nBytes;
-    int nChunk;
-    AVal method;
-    char *ptr;
+    int nChunk, nToRead;
 
     nBytes = recv(clnt_sock, header, 1, 0);
     if (nBytes == -1)
@@ -747,58 +767,69 @@ int RTMP_ReadPacket(int clnt_sock, RTMPPacket *packet)
     header++;
 
     // msg header + basic header 为总的header长度
-    if (packet->m_headerType == 0) {
-      hSize = 12;
-    } else if (packet->m_headerType == 1) {
-      hSize = 8;
-    } else {
-      printf("head type =%d\n", packet->m_headerType);
-      exit(1);
-    }
+    hSize = packetSize[packet->m_headerType];
+
+    // 如果head type + msg header长12，此时msg header中的timestamp为绝对值
+    if (hSize == 12) /* if we get a full header the timestamp is absolute */
+      packet->m_hasAbsTimestamp = true;
+
     // 不算header type
     nSize = hSize - 1;
-    recv(clnt_sock, header, nSize, 0);
+    // body被切分时nSize 为0
+    if (nSize > 0) {
+      recv(clnt_sock, header, nSize, 0);
+    }
+    if (nSize >= 3) {
+      //则取时间戳
+      packet->m_nTimeStamp = AMF_DecodeInt24(header);
+      if (nSize >= 6) {
 
-    //则取时间戳
-    packet->m_nTimeStamp = AMF_DecodeInt24(header);
+        //取body size
+        packet->m_nBodySize = AMF_DecodeInt24(header + 3);
+        packet->m_nBytesRead = 0;
+      }
+      if (nSize > 6) {
+        // 取packet type
+        packet->m_packetType = header[6];
+      }
+      if (nSize == 11) {
+        // 取msg streamID
+        packet->m_nInfoField2 = DecodeInt32LE(header + 7); 
+      }
+    }
+    // 由于只是测试命令部分，跳过扩展时间代码
 
-    //取body size
-    packet->m_nBodySize = AMF_DecodeInt24(header + 3);
-
-    // 取packet type
-    packet->m_packetType = header[6];
-
-    // 取msg streamID
-    packet->m_nInfoField2 = DecodeInt32LE(header + 7); 
-
-    packet->m_body = NULL;
-    if (!RTMPPacket_Alloc(packet, packet->m_nBodySize))
+    // 如果msg header中的body size记录有值
+    if (packet->m_nBodySize > 0 && packet->m_body == NULL)
     {
-        error_handling(" failed to allocate packet");
+      // packet->m_body = NULL;
+      if (!RTMPPacket_Alloc(packet, packet->m_nBodySize))
+      {
+          error_handling(" failed to allocate packet");
+      }
     }
 
     // 如果一个packet第一次读取，要通过m_nBytesRead来移动指针
-    nChunk = packet->m_nBodySize;
+    nToRead = packet->m_nBodySize - packet->m_nBytesRead;
+    // 默认读取大小
+    nChunk = 128;
+    // 如果剩余不足，取实际长度
+    if (nToRead < nChunk)
+      nChunk = nToRead;
 
     printf("packetType=0x%x, chunk len=%d\n", packet->m_packetType, nChunk);
 
-    // 这里长度没超过128，为了示例一次读取，如果长度大于128，需要多次读取并去掉每片前的head_type的1个字节
-    // m_nBodySize的长度是body的长度再加上每个分片的header的长度。官方是在循环调用RTMP_ReadPacket函数
-    // 默认分包长度是128 ，后面音视频流发送前可能会被改成其它值
-    nBytes = recv(clnt_sock, packet->m_body, nChunk, 0);
+    // 默认分包长度是128, 如果长度大于128，需要多次读取并去掉每片前的head的字节
+    // m_nBodySize的长度是body的长度再加上每个分片的header的长度
+    // 后面音视频流发送前可能会改分包长度为其它值
+    nBytes = recv(clnt_sock, packet->m_body + packet->m_nBytesRead, nChunk, 0);
     if (nBytes != nChunk)
     {
         printf("recv bytes=%d\n", nBytes);
         error_handling("failed to read body");
     }
-    packet->m_nBytesRead = nChunk;
+    packet->m_nBytesRead += nChunk;
     
-    // 包体指针向前移一步，跳过method类型字段
-    ptr = packet->m_body + 1;
-    // 解析method名字
-    AMF_DecodeString(ptr, &method);
-    printf("read body method type=%d, Invoking=%.*s\n", packet->m_body[0] , method.av_len, method.av_val);
-
     return 0;
 }
 
@@ -828,6 +859,57 @@ SendResultNumber(int clnt_sock, double txn, double ID)
   return RTMP_SendPacket(clnt_sock, &packet);
 }
 
+
+static int
+SendPublishResult(int clnt_sock, double txn)
+{
+    RTMPPacket packet;
+    //定义一个数组，并且定义一个指针指到数组尾
+    char pbuf[384], *pend = pbuf + sizeof(pbuf);
+    //定义一个字符串结构
+    AVal av;
+
+    printf("txn=%f\n", txn);
+
+    packet.m_nChannel = 0x04;//通过设置ChannelID来设置Basic stream id的长度和值
+    packet.m_headerType = 0; // Basic header的head type为0，表明msg header长度为11字节
+    packet.m_packetType = 0x14;//消息类型ID为20，表示为Invoke方法调用
+    packet.m_nTimeStamp = 0;// Chunk Msg Header中的时间戳
+    packet.m_nInfoField2 = 1;// Chunk Msg Header中的消息流id Msg StreamID
+    packet.m_hasAbsTimestamp = 0;// m_nTimeStamp是否为相对时间
+    packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
+
+    SAVC(onStatus);
+    
+    char *enc = packet.m_body;
+    enc = AMF_EncodeString(enc, pend, &av_onStatus);
+    enc = AMF_EncodeNumber(enc, pend, 0);
+    *enc++ = AMF_NULL;
+ 
+    // 定义AMF对象开始 , 以下的对象不是必须的
+    SAVC(level);
+    SAVC(code);
+    SAVC(description);
+
+    *enc++ = 3;//AMF_OBJECT
+    STR2AVAL(av, "status");
+    enc = AMF_EncodeNamedString(enc, pend, &av_level, &av);
+    STR2AVAL(av, "NetStream.Publish.Start");
+    enc = AMF_EncodeNamedString(enc, pend, &av_code, &av);
+    STR2AVAL(av, "Start publishing.");
+    enc = AMF_EncodeNamedString(enc, pend, &av_description, &av);
+    // 标记AMF对象结束
+    *enc++ = 0;
+    *enc++ = 0;
+    *enc++ = 9;//AMF_OBJECT_END
+
+    packet.m_nBodySize = enc - packet.m_body;
+    // 发送完回应以后，客户端会一次性发送3个命令包 releaseStream, FCPublish, createStream
+    RTMP_SendPacket(clnt_sock, &packet);
+
+    return 0;
+}
+
 void ServeInvoke(AMFObject *obj, int clnt_sock)
 {
     AMFObject cobj;
@@ -836,9 +918,12 @@ void ServeInvoke(AMFObject *obj, int clnt_sock)
 
     AVal method;
     method = obj->o_props[0].p_vu.p_aval;
+ 
+    printf("Invoking=%.*s\n", method.av_len, method.av_val);
 
     SAVC(connect);
     SAVC(createStream);
+    SAVC(publish);
     if (AVMATCH(&method, &av_connect)) {
       // 定义av_app等变量
       SAVC(app);
@@ -914,6 +999,9 @@ void ServeInvoke(AMFObject *obj, int clnt_sock)
     } else if (AVMATCH(&method, &av_createStream)) {
       double txn = obj->o_props[1].p_vu.p_number;
       SendResultNumber(clnt_sock, txn, 1);
+    } else if (AVMATCH(&method, &av_publish)) {
+      double txn = obj->o_props[1].p_vu.p_number;
+      SendPublishResult(clnt_sock, txn);
     }
 
 }
@@ -1197,11 +1285,17 @@ int main(int argc, char *argv[])
     }
     handshake_server(clnt_sock);
     
+    // 初始化
+    packet.m_body = NULL;
     int i;
-    // 读取connect, releaseStream, FCPublish, createStream
-    for (i = 0; i<4; i++) {
+    // 读取connect, releaseStream, FCPublish, createStream, publish
+    for (i = 0; i<5; ) {
 
       RTMP_ReadPacket(clnt_sock, &packet);
+      if (packet.m_nBodySize != packet.m_nBytesRead)
+        continue;
+      //走到这里说明读全一个请求了  
+      i++;
 
       AMFObject obj;
       //反解到object
@@ -1217,6 +1311,8 @@ int main(int argc, char *argv[])
           packet.m_body = NULL;
       }
     }
+    // 休息一秒让客户端传些数据，可以看出@setDataFrame 是不等待回应的
+    sleep(1);
     close(clnt_sock);
     close(serv_sock);
     return 0;
